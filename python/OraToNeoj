@@ -1,0 +1,205 @@
+import oracledb
+import requests
+import re
+import datetime
+import os
+from neo4j import GraphDatabase
+from requests_negotiate_sspi import HttpNegotiateAuth
+from dotenv import load_dotenv
+
+load_dotenv()  # loads python/.env when run from the python/ directory
+
+
+def clob_to_str(value):
+    return value.read() if hasattr(value, "read") else value
+
+
+# -----------------------------
+# CONFIGURATION
+# -----------------------------
+
+ORACLE_DSN  = os.getenv("ORACLE_DSN")
+ORACLE_USER = os.getenv("ORACLE_USER")
+ORACLE_PASS = os.getenv("ORACLE_PASS")
+
+APEX_USER = os.getenv("APEX_USER")
+APEX_PASS = os.getenv("APEX_PASS")
+
+OUTPUT_DIR = os.getenv("OUTPUT_DIR")
+
+NEO4J_URI      = os.getenv("NEO4J_URI")
+NEO4J_USER     = os.getenv("NEO4J_USER")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
+
+
+# -----------------------------
+# DB CONNECTIONS
+# -----------------------------
+
+
+oracle = oracledb.connect(
+    user=ORACLE_USER,
+    password=ORACLE_PASS,
+    dsn=ORACLE_DSN
+)
+
+cursor = oracle.cursor()
+
+
+neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+
+# -----------------------------
+# GET ALL NEW JOBS
+# -----------------------------
+
+cursor.execute("""
+    SELECT id, file_create, cypher
+    FROM neoj_apex_export
+    WHERE status = 'NEW'
+""")
+
+rows = cursor.fetchall()
+
+
+for job_id, file_create, cypher_script in rows:
+
+    # Convert CLOBs to strings
+    if hasattr(file_create, "read"):
+        file_create = file_create.read()
+
+    if hasattr(cypher_script, "read"):
+        cypher_script = cypher_script.read()
+
+    print(f"\n=== Processing job {job_id} ===")
+
+    # -----------------------------------------------------
+    # Mark job as started
+    # -----------------------------------------------------
+    cursor.execute("""
+        UPDATE neoj_apex_export
+        SET started_at = SYSTIMESTAMP
+        WHERE id = :id
+    """, {"id": job_id})
+    oracle.commit()
+
+    try:
+        # -----------------------------------------------------
+        # 1. UPDATE STATUS → CREATING_FILE
+        # -----------------------------------------------------
+        cursor.execute("""
+            UPDATE neoj_apex_export
+            SET status = 'CREATING_FILE'
+            WHERE id = :id
+        """, {"id": job_id})
+        oracle.commit()
+
+ # -----------------------------------------------------
+        # 2. PARSE URL AND OUTPUT FILENAME FROM FILE_CREATE
+        # -----------------------------------------------------
+        print(f"DEBUG FILE_CREATE: {file_create}")  # Add this to see raw content
+
+        # Try multiple patterns to match URL
+        url_match = re.search(r'Invoke-WebRequest\s+(?:-Uri\s+)?"([^"]+)"', file_create)
+        outfile_match = re.search(r'-OutFile\s+"([^"]+)"', file_create)
+
+        # Also try without quotes
+        if not url_match:
+            url_match = re.search(r'Invoke-WebRequest\s+(?:-Uri\s+)?([^\s]+)', file_create)
+        if not outfile_match:
+            outfile_match = re.search(r'-OutFile\s+([^\s]+)', file_create)
+
+        if not url_match or not outfile_match:
+            raise Exception(f"FILE_CREATE could not be parsed. Content: {file_create}")
+
+        url = url_match.group(1)
+        filename = outfile_match.group(1)
+        
+        # Strip just the filename (not full path) for output
+        filename = filename.split("\\")[-1].split("/")[-1]
+        output_path = f"{OUTPUT_DIR}\\{filename}"
+
+        # -----------------------------------------------------
+        # 3. DOWNLOAD JSON FILE
+        # -----------------------------------------------------
+        print(f"Downloading {url} → {output_path}")
+
+        response = requests.get(
+            url,
+            verify=False,
+            auth=HttpNegotiateAuth(),   # uses current Windows session automatically
+            headers={"Accept": "application/json"}
+        )
+
+        print(f"DEBUG HTTP Status: {response.status_code}")
+        print(f"DEBUG Response (first 200): {response.text[:200]}")
+
+        if response.status_code != 200:
+            raise Exception(f"Download failed (HTTP {response.status_code})+url: {url}")
+
+        with open(output_path, "wb") as f:
+            f.write(response.content)
+
+        # -----------------------------------------------------
+        # UPDATE STATUS → EXECUTING_CYPHER
+        # -----------------------------------------------------
+        cursor.execute("""
+            UPDATE neoj_apex_export
+            SET status = 'EXECUTING_CYPHER'
+            WHERE id = :id
+        """, {"id": job_id})
+        oracle.commit()
+
+        # -----------------------------------------------------
+        # 4. EXECUTE CYPHER (replace filename)
+        # -----------------------------------------------------
+        cypher_to_execute = cypher_script.replace("export2263.json", output_path)
+
+        print("Executing cypher for", job_id)
+
+        with neo4j_driver.session() as session:
+            statements = [s.strip() for s in cypher_to_execute.split(";") if s.strip()]
+            for statement in statements:
+                session.run(statement)
+
+        # -----------------------------------------------------
+        # SUCCESS → CYPHER_EXECUTED
+        # -----------------------------------------------------
+        cursor.execute("""
+            UPDATE neoj_apex_export
+            SET 
+                status = 'CYPHER_EXECUTED',
+                error_message = NULL,
+                processed_at = SYSTIMESTAMP
+            WHERE id = :id
+        """, {"id": job_id})
+        oracle.commit()
+
+        print(f"Job {job_id} completed successfully.")
+
+    except Exception as e:
+        # -----------------------------------------------------
+        # ON ERROR → SAVE ERROR MESSAGE + END TIME
+        # -----------------------------------------------------
+        error_text = str(e)[0:4000]  # CLOB safe
+
+        cursor.execute("""
+            UPDATE neoj_apex_export
+            SET 
+                status = 'ERROR',
+                error_message = :msg,
+                processed_at = SYSTIMESTAMP
+            WHERE id = :id
+        """, {"id": job_id, "msg": error_text})
+
+        oracle.commit()
+
+        print(f"ERROR in job {job_id}: {error_text}")
+
+# -----------------------------
+# CLEANUP
+# -----------------------------
+cursor.close()
+oracle.close()
+neo4j_driver.close()
+
+print("\nAll jobs processed.")

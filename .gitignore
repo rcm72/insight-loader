@@ -1,0 +1,23 @@
+# Credentials
+.env
+python/.env
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor history
+.history/
+
+# Logs
+*.log
+history.log
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Backup files
+bac/
