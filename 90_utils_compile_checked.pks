@@ -1,4 +1,4 @@
-CREATE OR REPLACE PACKAGE Y055490.neo4jUtils as
+CREATE OR REPLACE PACKAGE neo4jUtils as
     -- Utilities
     
     type t_call_rec is record (
@@ -607,7 +607,7 @@ END;
 Link submit button to submmit process page 
 match(p:APEXPage) where  match(b:APEXButton) where b.buttonActionCode="SUBMIT" and b.name= match(p)-[r:HAS_BUTTON]-(b) match(proc:APEXPageProcess) match(p)-[relProc:HAS_PROCESS]-(proc) merge(b)-[trg:triggers_proc]->(proc)  return b,trg,procedure
 
-na APEXPageProcess dodaj še extract klica procedure in kreiranje package in procedure v  neo4j bazi
+na APEXPageProcess dodaj ï¿½e extract klica procedure in kreiranje package in procedure v  neo4j bazi
 
 
 match(m:MigrationCase) where match(of:OraForm) where merge (m)-[rel:SOURCE_FROM]-(of) return m,of,rel

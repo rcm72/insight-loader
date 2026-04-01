@@ -1,4 +1,4 @@
-CREATE OR REPLACE PACKAGE BODY Y055490.neo4jUtils as
+CREATE OR REPLACE PACKAGE BODY neo4jUtils as
      /*
         Utilities
      */
