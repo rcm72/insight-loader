@@ -1,0 +1,428 @@
+CREATE OR REPLACE PACKAGE BODY NEO4J_ORA AS
+/******************************************************************************
+   NAME:       NEO4J_ORA
+   PURPOSE:
+
+   REVISIONS:
+   Ver        Date        Author           Description
+   ---------  ----------  ---------------  ------------------------------------
+   1.0        19/09/2024      CmrlecR       1. Created this package body.
+******************************************************************************/
+
+  PROCEDURE CompileIdentifiers(pOwner in varchar2, pPackage in varchar2, pType in varchar2 default 'pkg') is
+    lPrcSql varchar2(1000):='ALTER PROCEDURE <<pOwner>>.<<pPackage>> COMPILE';
+    lPkgSql varchar2(1000):='ALTER PACKAGE <<pOwner>>.<<pPackage>> COMPILE';
+    lPkgBodySql varchar2(1000):='ALTER PACKAGE <<pOwner>>.<<pPackage>> COMPILE BODY';
+        
+  BEGIN
+    if pType='pkg' then        
+        EXECUTE IMMEDIATE 'ALTER SESSION SET PLSCOPE_SETTINGS = ''IDENTIFIERS:ALL''';
+        lPkgSql:=replace(lPkgSql,'<<pOwner>>', pOwner);
+        lPkgSql:=replace(lPkgSql,'<<pPackage>>', pPackage);
+        EXECUTE IMMEDIATE lPkgSql; 
+        
+        DBMS_OUTPUT.PUT_LINE('lPkgSql: ' || lPkgSql);
+
+        lPkgBodySql:=replace(lPkgBodySql,'<<pOwner>>', pOwner);
+        lPkgBodySql:=replace(lPkgBodySql,'<<pPackage>>', pPackage);
+        EXECUTE IMMEDIATE lPkgBodySql;
+        
+        DBMS_OUTPUT.PUT_LINE('lPkgBodySql: ' || lPkgBodySql);
+    elsif pType='prc' then
+        EXECUTE IMMEDIATE 'ALTER SESSION SET PLSCOPE_SETTINGS = ''IDENTIFIERS:ALL''';
+        lPrcSql:=replace(lPrcSql,'<<pOwner>>', pOwner);
+        lPrcSql:=replace(lPrcSql,'<<pPackage>>', pPackage);
+        EXECUTE IMMEDIATE lPrcSql;
+        
+        DBMS_OUTPUT.PUT_LINE('lPrcSql: ' || lPrcSql);     
+    end if;
+  end CompileIdentifiers;
+  
+  PROCEDURE fillAllPackageTabs (pOwner in varchar2, pPackage in varchar2, pType in varchar2) is
+    l_server VARCHAR2(200):=upper(SYS_CONTEXT('USERENV', 'DB_NAME'));
+  begin  
+        DELETE FROM ALL_SOURCE_TMP
+        WHERE OWNER = pOwner
+          AND NAME = pPackage
+          AND TYPE = pType
+        ;  
+        
+        DELETE FROM ALL_IDENTIFIERS_LINES_TMP;        
+
+        INSERT INTO ALL_SOURCE_TMP(OWNER, NAME, TYPE, LINE, TEXT,ORIGIN_CON_ID)
+        (
+        SELECT OWNER, NAME, TYPE, LINE, TEXT,ORIGIN_CON_ID
+        FROM ALL_SOURCE
+        WHERE OWNER = pOwner
+          AND NAME = pPackage
+          AND TYPE = pType
+        )  
+        ;
+        
+        INSERT INTO ALL_IDENTIFIERS_LINES_TMP 
+            (OWNER, OBJECT_NAME, OBJECT_TYPE, NAME, USAGE, PROC_FROM, PROC_TO)    
+        SELECT 
+            d.owner,
+            d.object_name,
+            d.object_type,
+            d.name,
+            d.usage,
+            d.line                                           AS proc_from,
+            NVL(
+                LEAD(d.line) OVER (
+                    PARTITION BY d.owner, d.object_name, d.object_type
+                    ORDER BY d.line
+                ) - 1,
+                s.max_line                                   -- zadnja vrstica objekta
+            )                                                AS proc_to
+        FROM all_identifiers d
+        JOIN (
+            SELECT owner, name, type, MAX(line) AS max_line
+            FROM all_source
+            WHERE 1=1
+              AND owner = pOwner
+              AND name = pPackage
+              AND type = 'PACKAGE BODY'
+            GROUP BY owner, name, type
+        ) s ON  s.owner = d.owner
+            AND s.name  = d.object_name
+            AND s.type  = d.object_type
+        WHERE d.owner       = pOwner
+          AND d.object_name = pPackage
+          AND d.object_type = 'PACKAGE BODY'
+          AND d.type        IN ('PROCEDURE', 'FUNCTION')
+          AND d.usage       = 'DEFINITION';        
+
+
+  
+      INSERT INTO ALL_PACKAGE_TABS (
+               CREATED_ON,      CRUD,           LINE, 
+               NAME,            ORIGIN_CON_ID,  OWNER, 
+               PROCEDURE_NAME,  TABLE_NAME,     TEXT, 
+               TYPE)
+        WITH table_names AS (
+          SELECT owner, table_name
+          FROM all_tables
+          WHERE owner in (pOwner,'VMESNIK','GENERALI_ETL')
+/*          union 
+          select owner, table_name
+          FROM NEO4J_TABELE
+*/                    
+        ),
+        source_data AS (
+          SELECT /*+ MATERIALIZE */ DISTINCT table_names.OWNER, l_server || '.' || pOwner || '.' || table_names.table_name table_name, ALL_SOURCE_TMP.name object_name, ALL_SOURCE_TMP.LINE, ALL_SOURCE_TMP.origin_con_id,
+                  (SELECT l_server || '.' || LINES.OWNER || '.' || LINES.OBJECT_NAME || '.' || LINES.NAME pkgproc
+                   FROM ALL_IDENTIFIERS_LINES_TMP LINES
+                   WHERE OWNER = pOwner 
+                     AND OBJECT_NAME = pPackage
+                     AND ALL_SOURCE_TMP.LINE BETWEEN lines.proc_from AND lines.proc_to) pkgproc,        
+                   neo4j_ora.getCRUD(ALL_SOURCE_TMP.OWNER, ALL_SOURCE_TMP.name, ALL_SOURCE_TMP.LINE) crud_type,
+                   ALL_SOURCE_TMP.type,
+                   ALL_SOURCE_TMP.text                                                         
+          FROM ALL_SOURCE_TMP
+          JOIN table_names
+            ON INSTR(UPPER(ALL_SOURCE_TMP.TEXT), UPPER(table_names.table_name)) > 0
+           AND SUBSTR(TEXT, INSTR(UPPER(ALL_SOURCE_TMP.TEXT), UPPER(table_names.table_name)) + LENGTH(table_name), 1) NOT IN ('.')
+           AND SUBSTR(TEXT, INSTR(UPPER(ALL_SOURCE_TMP.TEXT), UPPER(table_names.table_name)), 1) NOT IN ('.')
+           --AND SUBSTR(TEXT, INSTR(UPPER(ALL_SOURCE_TMP.TEXT), UPPER(table_names.table_name)) - 1, 1) NOT IN ('_', '.')
+           and text not like '%Napaka%'
+          WHERE ALL_SOURCE_TMP.OWNER = pOwner
+            AND ALL_SOURCE_TMP.NAME = pPackage
+            AND SUBSTR(LTRIM(ALL_SOURCE_TMP.text), 1, 1) NOT IN ('-', '/', '*')
+            AND ALL_SOURCE_TMP.TYPE = pType
+        )
+        SELECT  sysdate created_on,                 source_data.crud_type,      source_data.line,
+                source_data.object_name name,       source_data.origin_con_id,  source_data.owner,
+                source_data.PKGPROC procedure_name, source_data.TABLE_NAME,     source_data.text,
+                source_data.type     
+        FROM source_data
+        WHERE crud_type != '-1';
+  
+
+        
+        if pType='PACKAGE BODY' THEN
+            update all_package_tabs apto
+            set table_name=(with missing_tables as (
+                                select  (select text from all_source als where als.owner=apt.owner and als.name=apt.name and als.type=apt.type and als.LINE=apt.line+1) first_line,
+                                        (select text from all_source als where als.owner=apt.owner and als.name=apt.name and als.type=apt.type and als.LINE=apt.line+2) second_line,
+                                        apt.*,
+                                        apt.rowid apt_rowid
+                                from all_package_tabs apt
+                                where table_name is null
+                            )
+                            select distinct alt.OWNER ||'.'|| alt.TABLE_NAME
+                            from missing_tables mt, all_tables alt
+                            where 1=1
+                                and (REGEXP_LIKE(upper(mt.FIRST_LINE), '(^|\s)' || alt.TABLE_NAME || '(\s|$)', 'i'))
+                                and apto.rowid=mt.APT_ROWID   
+                )
+            where table_name is null
+                and OWNER = pOwner
+                AND NAME = pPackage
+            ;
+
+            update all_package_tabs apto
+            set table_name=(with missing_tables as (
+                                select  (select text from all_source als where als.owner=apt.owner and als.name=apt.name and als.type=apt.type and als.LINE=apt.line+1) first_line,
+                                        (select text from all_source als where als.owner=apt.owner and als.name=apt.name and als.type=apt.type and als.LINE=apt.line+2) second_line,
+                                        apt.*,
+                                        apt.rowid apt_rowid
+                                from all_package_tabs apt
+                                where table_name is null
+                            )
+                            select distinct alt.OWNER ||'.'|| alt.TABLE_NAME
+                            from missing_tables mt, all_tables alt
+                            where 1=1
+                                and REGEXP_LIKE(upper(mt.FIRST_LINE), '(^|\s|\.?)' || upper(alt.OWNER || '.' || alt.TABLE_NAME) || '(\s|$)', 'i')
+                                and apto.rowid=mt.APT_ROWID   
+                )
+            where table_name is null
+                and OWNER = pOwner
+                AND NAME = pPackage
+            ;               
+        end if;
+    end fillAllPackageTabs;
+  
+  PROCEDURE REMOVE_PKG_ALL_IDENT( pOwner in varchar2, pPackage in varchar2) is
+    lPkgSql varchar2(1000):='ALTER PACKAGE <<pOwner>>.<<pPackage>> COMPILE';
+    lPkgBodySql varchar2(1000):='ALTER PACKAGE <<pOwner>>.<<pPackage>> COMPILE BODY';
+  BEGIN
+    EXECUTE IMMEDIATE 'ALTER SESSION SET PLSCOPE_SETTINGS = ''IDENTIFIERS:NONE''';
+
+    lPkgSql:=replace(lPkgSql,'<<pOwner>>', pOwner);
+    lPkgSql:=replace(lPkgSql,'<<pPackage>>', pPackage);
+    EXECUTE IMMEDIATE lPkgSql; 
+
+    lPkgBodySql:=replace(lPkgBodySql,'<<pOwner>>', pOwner);
+    lPkgBodySql:=replace(lPkgBodySql,'<<pPackage>>', pPackage);
+    EXECUTE IMMEDIATE lPkgBodySql;
+  END;  
+  
+  function getCRUD(pOwner in varchar2, pPackage in varchar2, pLine in number) return varchar2 is
+    lText varchar2(32000);
+    lProcFrom number; 
+    lProcTo number;
+    lineCnt number:=pLine;
+    lFound boolean:=false;
+    lCrud varchar2(255);  
+    i number:=1;  
+    lKeywordCnt number;
+    lKeyword varchar2(255);
+    lKeywordMin varchar2(255);
+  BEGIN
+    select proc_from, proc_to
+    into lProcFrom, lProcTo
+    from ALL_IDENTIFIERS_LINES_TMP lines
+    where   lines.OWNER=pOwner
+        and lines.OBJECT_NAME=pPackage
+        and pLine between lines.PROC_FROM and lines.PROC_TO;
+       
+    while lineCnt>=lProcFrom  and lFound=false  --preišèe zadnji pet vrstic in se ustavi na zaèetku procedure
+    loop
+        select case when instr(upper(text),' SELECT ')>0 then 'SELECT' 
+                    when instr(upper(text),' UPDATE ')>0 then 'UPDATE'
+                    when instr(upper(text),' DELETE ')>0 then 'DELETE'
+                    when instr(upper(text),' INSERT ')>0 then 'INSERT'
+                    when instr(upper(text),' TRUNCATE ')>0 then 'TRUNCATE'
+                    when instr(upper(text),'(SELECT ')>0 then 'SELECT' 
+                    when instr(upper(text),'(UPDATE ')>0 then 'UPDATE'
+                    when instr(upper(text),'(DELETE ')>0 then 'DELETE'
+                    when instr(upper(text),'(INSERT ')>0 then 'INSERT'
+                    when instr(upper(text),'(TRUNCATE ')>0 then 'TRUNCATE'                    
+               END,
+               upper(text) text
+        into lcrud , lText
+        from ALL_SOURCE_TMP sourc
+        where sourc.owner=pOwner and sourc.NAME=pPackage and sourc.LINE=lineCnt            
+        ;       
+        
+        select count(*), min(keyword), max(keyword)
+        into lKeywordCnt, lKeywordMin, lKeyword
+        from MY_RESERVED_WORDS rw
+        where 1=1
+           and instr(lText,keyword)>0
+        ;
+          
+        if lKeywordCnt>0 then
+            return '-1';
+        end if;
+                       
+        if lCrud is not null then            
+                lFound:=true;
+        end if;
+        lineCnt:=lineCnt-1;   
+        i:=i+1;         
+    end loop;
+    return lCrud;
+  END;
+  
+    procedure extractCypher(
+                            pv_owner in varchar2,
+                            pv_package_name in varchar2,
+                            pv_predicate in varchar2 default '%') as
+        l_merge_cypher_owns_orig varchar2(4000):='merge(r<<i>>:<<r_type>>{name:''<<r_merge_name>>'',label:''<<label>>''}) merge(rl<<i>>:database{name:''<<rl_name>>'',label:''<<rl_name>>''}) merge(rl<<i>>)-[:owns]->(r<<i>>) ' ;   
+        l_merge_cypher_uses_orig varchar2(4000):='merge(pkg<<i>>:<<pkg_type>>{name:''<<r_merge_name>>'',label:''<<label>>''}) merge(tab<<i>>:<<tab_type>>{name:''<<rl_name>>'',label:''<<rl_name>>''}) merge(pkg<<i>>)-[:uses]->(tab<<i>>) ' ;
+        l_merge_cypher varchar2(4000);
+        i integer :=0;
+        l_server VARCHAR2(200):=SYS_CONTEXT('USERENV', 'DB_NAME') ;
+        function getType(pv_type in varchar2) return varchar2 as 
+        begin
+            if pv_type='TABLE' then
+                return 'table' ;
+            elsif pv_type='PACKAGE BODY' then
+                return 'package';
+            else return lower(replace(pv_type,' ','_'));
+            end if;
+        end;                                
+    begin
+        -- Procedure calls
+        for cCalls in (
+                        SELECT 
+                          'merge(n1:OraclePackage {name:"'  || PACKAGE_NAME_FULL ||'" , label:"'|| PACKAGE_NAME_FULL ||'"}) merge(n2:OracleProcedure {name:"'  || CALLEE_PROCEDURE ||'", label:"'|| CALLEE_PROCEDURE ||'"})  MERGE (n1)-[e:contains]->(n2)  return n1,n2,e;' cypher_callee_contain
+                          ,'merge(n1:OraclePackage {name:"'  || PACKAGE_NAME_FULL ||'" , label:"'|| PACKAGE_NAME_FULL ||'"  }) merge(n2:OracleProcedure {name:"'  || CALLER_PROC ||'" , label:"'|| CALLER_PROC ||'"})  MERGE (n1)-[e:contains]->(n2)  return n1,n2,e;'  cypher_caller_contain
+                          ,'merge(n1:OraclePackage {name:"'  || caller_proc ||'" , label:"'|| caller_proc ||'" }) merge(n2:OracleProcedure {name:"'  || CALLEE_PROCEDURE ||'" , label:"'|| CALLEE_PROCEDURE ||'"})  MERGE (n1)-[e:call]->(n2)  return n1,n2,e;'  cypher_for_call 
+                    --,pod.*
+                    FROM ( 
+                        SELECT AI.OBJECT_NAME, USAGE, (SELECT l_server||'.'||AI.OWNER||'.'||AI.OBJECT_NAME||'.'||NAME  
+                                FROM ALL_IDENTIFIERS_LINES_TMP AIL 
+                                WHERE AI.LINE BETWEEN AIL.PROC_FROM AND PROC_TO 
+                                    AND AIL.OWNER=AI.OWNER
+                                    AND AIL.OBJECT_NAME=AI.OBJECT_NAME            
+                                ) CALLER_PROC, 
+                            l_server||'.'|| AI.DECLARED_OWNER ||'.'|| AI.DECLARED_OBJECT_NAME ||'.'|| AI.NAME AS CALLEE_PROCEDURE,
+                             AI.OBJECT_TYPE, AI.TYPE, 
+                            l_server||'.'|| AI.DECLARED_OWNER||'.'||AI.DECLARED_OBJECT_NAME PACKAGE_NAME_FULL
+                        FROM ALL_IDENTIFIERS AI
+                        WHERE AI.OWNER = pv_owner
+                                AND AI.OBJECT_NAME = pv_package_name
+                                AND USAGE='CALL'
+/*                                
+                                AND NAME NOT IN (SELECT KEYWORD
+                                                FROM neoj_reserved_words rw
+                                                WHERE rw.KEYWORD = NAME
+                                                )
+*/                                                  
+                                AND TYPE IN ('FUNCTION','PROCEDURE')
+                        ) 
+                    )
+        loop
+            dbms_output.put_line(cCalls.cypher_callee_contain);
+            dbms_output.put_line(cCalls.cypher_caller_contain);
+            dbms_output.put_line(cCalls.cypher_for_call);            
+        end loop;  --cCalls
+        
+/*        
+        -- package creation
+        for cPackage in (
+            select distinct l_server||'.'||owner||'.'||object_name,
+                    'merge (t:package {name:"'||l_server||'.'||owner||'.'||object_name||'", label:"'||l_server||'.'||owner||'.'||object_name||'"}) return t;'
+                    cypher_merge
+            FROM ALL_IDENTIFIERS AI
+            WHERE AI.OWNER = pv_owner
+                    AND AI.OBJECT_NAME = pv_package_name
+                    AND USAGE='CALL'
+                    
+--                    AND NAME NOT IN (SELECT KEYWORD
+--                                    FROM neoj_reserved_words rw
+--                                    WHERE rw.KEYWORD = NAME)
+                                      
+                    AND TYPE IN ('FUNCTION','PROCEDURE')
+            ) loop 
+                dbms_output.put_line(cPackage.cypher_merge);
+        end loop;
+        
+        -- crud table creation
+        for cTabels in
+            (select 'merge (t:table {name:"' ||  l_server ||'.'|| t.owner||'.'|| t.table_name|| '",label:"' || l_server ||'.'|| t.owner||'.'|| t.table_name ||  '"})
+                    merge (proc:pkgproc {name:"' ||  l_server ||'.'|| PROCEDURE_NAME || '",label:"' || l_server ||'.'|| PROCEDURE_NAME ||  '"})
+                    merge (proc)-[l:' || lower(CRUD) || ' ]->(t) return proc, t, l;
+            '   as cypher_merge 
+            from all_package_tabs apt, all_tables t
+            where apt.table_name=t.TABLE_NAME
+            ) loop
+                dbms_output.put_line(cTabels.cypher_merge);
+        end loop;
+        
+        -- link packages and procedures
+        for cPkgProc in (SELECT 
+            'merge (pkg:package {name:"'||l_server ||'.'|| owner||'.' ||object_name||'" ,label:"'|| l_server ||'.'|| owner||'.' ||object_name||'"}) '||chr(10)||
+            'merge (prc:pkgproc {name:"'||l_server ||'.'|| owner||'.' ||object_name||'.'|| procedure_name ||'" ,label:"'|| l_server ||'.'|| owner||'.' ||object_name||'.'|| procedure_name||'"})'||chr(10)||
+            ' merge (pkg) - [:contains]  -> (prc)'||';' merge_pkg_prc
+            FROM ALL_PROCEDURES
+            WHERE OBJECT_TYPE='PACKAGE'
+                AND OWNER=pv_owner
+                AND OBJECT_NAME=pv_package_name        
+                AND PROCEDURE_NAME IS NOT NULL        
+            ) loop
+                dbms_output.put_line(cPkgProc.merge_pkg_prc);
+        end loop;
+        
+
+        -- link dependencies
+            for c in (  select distinct owner, name, type, referenced_owner, referenced_name, referenced_type,  replace(nvl( case when referenced_link_name = 'PROD_INIS' THEN 'INPR' ELSE referenced_link_name end ,l_server),'.SIAS.SI',null) referenced_link_name
+                        from all_dependencies AD
+                        where owner in (pv_owner)
+                            and REFERENCED_OWNER IN (pv_owner)
+                            and name like pv_predicate
+                            and referenced_type<>'NON-EXISTENT'
+                            and referenced_type<>'NON-EXISTENT'                    
+                     )
+            loop     
+                l_merge_cypher:=l_merge_cypher_owns_orig;
+                l_merge_cypher:=replace(l_merge_cypher,'<<r_type>>',getType(c.referenced_type));
+                l_merge_cypher:=replace(l_merge_cypher,'<<r_merge_name>>',c.referenced_link_name||'.'||c.referenced_owner||'.'||c.referenced_name);
+                l_merge_cypher:=replace(l_merge_cypher,'<<label>>',c.referenced_link_name||'.'||c.referenced_owner||'.'||c.referenced_name);
+                l_merge_cypher:=replace(l_merge_cypher,'<<rl_name>>',c.referenced_link_name);
+                l_merge_cypher:=replace(l_merge_cypher,'<<i>>',i);
+                dbms_output.put_line(l_merge_cypher||';');                
+        --
+                l_merge_cypher:=l_merge_cypher_uses_orig;
+                l_merge_cypher:=replace(l_merge_cypher,'<<pkg_type>>',getType(c.type));
+                l_merge_cypher:=replace(l_merge_cypher,'<<tab_type>>',getType(c.REFERENCED_TYPE));        
+                l_merge_cypher:=replace(l_merge_cypher,'<<r_merge_name>>',l_server||'.'||c.owner||'.'||c.name);
+                l_merge_cypher:=replace(l_merge_cypher,'<<label>>',l_server||'.'||c.owner||'.'||c.name);
+                l_merge_cypher:=replace(l_merge_cypher,'<<rl_name>>',c.referenced_link_name||'.'||c.referenced_owner||'.'||c.referenced_name);                        
+                l_merge_cypher:=replace(l_merge_cypher,'<<i>>',i);        
+                dbms_output.put_line(l_merge_cypher||';');        
+        --       
+        -- check if the procedure is on the same server
+                if (l_server=c.referenced_link_name) then
+                    l_merge_cypher:=l_merge_cypher_owns_orig;
+                    l_merge_cypher:=replace(l_merge_cypher,'<<r_type>>',getType(c.type));
+                    l_merge_cypher:=replace(l_merge_cypher,'<<r_merge_name>>',l_server||'.'||c.owner||'.'||c.name);
+                    l_merge_cypher:=replace(l_merge_cypher,'<<label>>',l_server||'.'||c.owner||'.'||c.name);
+                    l_merge_cypher:=replace(l_merge_cypher,'<<rl_name>>',c.referenced_link_name);
+                    l_merge_cypher:=replace(l_merge_cypher,'<<i>>',i);
+                    dbms_output.put_line(l_merge_cypher||';');
+                else
+                    l_merge_cypher:=l_merge_cypher_owns_orig;
+                    l_merge_cypher:=replace(l_merge_cypher,'<<r_type>>',getType(c.referenced_type));
+                    l_merge_cypher:=replace(l_merge_cypher,'<<r_merge_name>>',c.referenced_link_name||'.'||c.referenced_owner||'.'||c.referenced_name);
+                    l_merge_cypher:=replace(l_merge_cypher,'<<label>>',c.referenced_link_name||'.'||c.referenced_owner||'.'||c.referenced_name);
+                    l_merge_cypher:=replace(l_merge_cypher,'<<rl_name>>',c.referenced_link_name);
+                    l_merge_cypher:=replace(l_merge_cypher,'<<i>>',i);
+                    dbms_output.put_line(l_merge_cypher||';');        
+                end if;
+                i:=i+1;        
+            end loop;    
+    
+    
+            -- Add procedures to packages
+            for cProc in (    
+                SELECT 'merge(pkg'||rownum||':package{name:' || '''' || l_server || '.' || ad.OWNER || '.' || ad.NAME || '''' || ',label:' || '''' || l_server || '.' || ad.OWNER || '.' || ad.NAME || '''' || '}) ' ||
+                               'merge(prc'||rownum||':pkgproc{name:' || '''' || l_server || '.' || ap.OWNER|| '.' || ad.NAME || '.' || ap.PROCEDURE_NAME || '''' || ',label:' || '''' ||l_server || '.' || ap.OWNER|| '.' || ad.NAME || '.' || ap.PROCEDURE_NAME || '''' || '}) ' ||
+                               'merge(pkg'||rownum||')-[:contains]->(prc'||rownum||');' AS result_string
+                        FROM all_procedures AP
+                        JOIN all_dependencies AD ON ap.owner = ad.owner AND ap.object_name = AD.NAME
+                        WHERE PROCEDURE_NAME IS NOT NULL
+                          AND ap.owner IN (pv_owner)
+                          AND ad.referenced_type <> 'NON-EXISTENT'
+                          AND ad.TYPE = 'PACKAGE'
+                          AND AP.OBJECT_NAME=pv_package_name
+                          ) loop
+                dbms_output.put_line(cProc.result_string);
+            end loop;
+*/            
+    end;
+END NEO4J_ORA;
+/

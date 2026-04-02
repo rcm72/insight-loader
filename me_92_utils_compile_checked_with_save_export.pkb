@@ -3740,7 +3740,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
                 to_char(created_at, 'dd.mm.yyyy hh24:mi:ss') as created_at,
                 updated_by,
                 to_char(updated_at, 'dd.mm.yyyy hh24:mi:ss') as updated_at
-            from Y055490.ME_MIGRATION_CASE
+            from ME_MIGRATION_CASE
             where legacy_app_id = nvl(pnLegacyAppId, legacy_app_id)
               and migration_case_id = nvl(pnMigrationCaseId, migration_case_id)
             order by case_code
@@ -5070,10 +5070,10 @@ WHERE MC_PAGE.MIGRATION_CASE_ID=
         pv_APPLICATION_ID number;       
     begin
         neo4jutils.prepare_apex_all(
-            pn_app_id        => TO_NUMBER(pn_APPLICATION_ID),
-            pv_workspace     => pv_WORKSPACE,
-            pn_page_id       => pv_PAGE_ID,
-            pv_project_name  => pv_PROJECT_NAME,
+            pn_app_id        =>  pv_APPLICATION_ID,
+            pv_workspace     => pv_workspace,
+            pn_page_id       => pn_page_id,
+            pv_project_name  => pv_project_name,
             pn_jobid_regions => l_pn_jobid_regions,
             pn_jobid_buttons => l_pn_jobid_buttons
         );

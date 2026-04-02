@@ -12,7 +12,7 @@ CREATE OR REPLACE PACKAGE BODY neoj_pkg_customer AS
       INSERT INTO neoj_customers(name) VALUES (p_name)
       RETURNING customer_id INTO v_customer_id;
 
-      -- demo: ob dodajanju stranke avtomatsko ustvarimo naro�ilo
+      -- demo: ob dodajanju stranke avtomatsko ustvarimo naro?ilo
       neoj_pkg_order.create_order(v_customer_id);
   END;
 
@@ -23,6 +23,7 @@ CREATE OR REPLACE PACKAGE BODY neoj_pkg_customer AS
   END;
 END neoj_pkg_customer;
 /
+
 
 -- Paket za delo z naročili
 CREATE OR REPLACE PACKAGE neoj_pkg_order AS
