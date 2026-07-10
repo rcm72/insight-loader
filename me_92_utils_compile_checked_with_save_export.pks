@@ -1,5 +1,4 @@
---CREATE OR REPLACE PACKAGE neo4jUtils as
-CREATE OR REPLACE PACKAGE NEO4JUTILS AUTHID CURRENT_USER AS
+CREATE OR REPLACE PACKAGE Y055490.NEO4JUTILS AUTHID CURRENT_USER AS
     -- Utilities
     
     type t_call_rec is record (
@@ -405,7 +404,26 @@ CREATE OR REPLACE PACKAGE NEO4JUTILS AUTHID CURRENT_USER AS
         pvOutCypher     out clob,
         pvOutFile       out clob,
         pn_id           out number
-    );    
+    );
+    
+    
+    function build_procedure_call_chunk_text(
+        pn_jobid           in number,
+        pv_package_owner   in varchar2,
+        pv_package_name    in varchar2,
+        pv_procedure_name  in varchar2
+    ) return clob;
+
+    procedure export_ora_pkg_prc_call_chunks(
+        pn_JOBID        in number,
+        pvOutputSource  in varchar2,
+        pvOutputType    in varchar2,
+        pvApexUrl       in varchar2,
+        pv_project_name in varchar2,
+        pvOutCypher     out clob,
+        pvOutFile       out clob,
+        pn_id           out number
+    );        
     
     PROCEDURE prepare_apex_all (
         pn_app_id        IN NUMBER,
@@ -490,7 +508,13 @@ CREATE OR REPLACE PACKAGE NEO4JUTILS AUTHID CURRENT_USER AS
         pn_id           out number
     );
     
-
+    procedure prepare_export_package( pv_owner in varchar2,
+                            pv_object_name in varchar2,
+                            pv_OUTPUTSOURCE in varchar2,
+                            pv_OUTPUTTYPE  in varchar2,
+                            pv_APEXURL  in varchar2,
+                            pv_project_name in varchar2                             
+                            );
     
 
 
@@ -664,7 +688,7 @@ END;
 Link submit button to submmit process page 
 match(p:APEXPage) where  match(b:APEXButton) where b.buttonActionCode="SUBMIT" and b.name= match(p)-[r:HAS_BUTTON]-(b) match(proc:APEXPageProcess) match(p)-[relProc:HAS_PROCESS]-(proc) merge(b)-[trg:triggers_proc]->(proc)  return b,trg,procedure
 
-na APEXPageProcess dodaj �e extract klica procedure in kreiranje package in procedure v  neo4j bazi
+na APEXPageProcess dodaj ?e extract klica procedure in kreiranje package in procedure v  neo4j bazi
 
 
 match(m:MigrationCase) where match(of:OraForm) where merge (m)-[rel:SOURCE_FROM]-(of) return m,of,rel

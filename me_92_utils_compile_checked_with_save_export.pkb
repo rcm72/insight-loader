@@ -1,4 +1,11 @@
-CREATE OR REPLACE PACKAGE BODY neo4jUtils as
+CREATE OR REPLACE PACKAGE BODY Y055490.neo4jUtils AS
+--CREATE OR REPLACE PACKAGE body NEO4JUTILS  AS
+/* to fix
+    --                and (pv_workspace is null or upper(s.workspace) = upper(pv_workspace))
+    
+    function build_apex_region_chunk_text(
+*/
+
      /*
         Utilities
      */
@@ -222,6 +229,11 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
                 l_package   := l_part2;
                 l_procedure := l_part3;
             end if;
+            
+            dbms_output.put_line('l_owner ' || l_owner || chr(10) ||  
+                'l_package '  || l_package || chr(10) ||
+                'l_procedure '  || l_procedure || chr(10) 
+                );
 
             if l_package is not null and l_procedure is not null then
                 if upper(l_package) not like 'DBMS\_%' escape '\'
@@ -303,7 +315,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
                    t.table_owner,
                    t.table_name,
                    t.dml_type,
-                   t.source_text,
+--                   t.source_text,
                    t.package_full_name,
                    t.procedure_full_name,
                    t.object_full_name
@@ -330,7 +342,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
             apex_json.write('tableOwner',        rec.table_owner);
             apex_json.write('tableName',         rec.table_name);
             apex_json.write('dmlType',           rec.dml_type);
-            apex_json.write('sourceText',        rec.source_text);
+--            apex_json.write('sourceText',        rec.source_text);
             apex_json.write('packageFullName',   rec.package_full_name);
             apex_json.write('procedureFullName', rec.procedure_full_name);
             apex_json.write('objectFullName',    rec.object_full_name);
@@ -359,29 +371,32 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
     UNWIND value.data AS row
 
     MERGE (srcPkg:OraclePackage {name: row.packageFullName})
-    SET srcPkg.dbName      = row.dbName,
+    SET srcPkg.id_rc       = coalesce(row.id_rc, randomUUID()),
+        srcPkg.dbName      = row.dbName,
         srcPkg.owner       = row.packageOwner,
         srcPkg.packageName = row.packageName,
-        srcPkg.fullName    = row.packageFullName,
+        srcPkg.name         = row.packageFullName,
         srcPkg.projectName = row.projectName,
         srcPkg.jobId       = row.jobId
 
     MERGE (srcPrc:OracleProcedure {name: row.procedureFullName})
-    SET srcPrc.dbName        = row.dbName,
+    SET srcPrc.id_rc       = coalesce(row.id_rc, randomUUID()),
+        srcPrc.dbName        = row.dbName,
         srcPrc.owner         = row.packageOwner,
         srcPrc.packageName   = row.packageName,
         srcPrc.procedureName = row.procedureName,
-        srcPrc.fullName      = row.procedureFullName,
+        srcPrc.name           = row.procedureFullName,
         srcPrc.projectName   = row.projectName,
         srcPrc.jobId         = row.jobId
 
     MERGE (srcPkg)-[:HAS_PROCEDURE]->(srcPrc)
 
     MERGE (obj:ORADbObject {name: row.objectFullName})
-    SET obj.dbName      = row.dbName,
+    SET ogj.id_rc       = coalesce(row.id_rc, randomUUID()),
+        obj.dbName      = row.dbName,
         obj.owner       = row.tableOwner,
         obj.objectName  = row.tableName,
-        obj.fullName    = row.objectFullName,
+        obj.name        = row.objectFullName,
         obj.projectName = row.projectName,
         obj.jobId       = row.jobId
 
@@ -390,7 +405,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
     CALL apoc.do.case(
       [
         row.dmlType = "SELECT",
-        ''MERGE (srcPrc)-[r:SELECTS_FROM {sourceLine: row.sourceLine}]->(obj)
+        ''MERGE (srcPrc)-[r:SELECTS_FROM ]->(obj)
           SET r.sourceText  = row.sourceText,
               r.dbName      = row.dbName,
               r.projectName = row.projectName,
@@ -429,7 +444,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
               r.jobId       = row.jobId
           RETURN r''
       ],
-      ''MERGE (srcPrc)-[r:ACCESSES_DB_OBJECT {sourceLine: row.sourceLine}]->(obj)
+      ''MERGE (srcPrc)-[r:ACCESSES_DB_OBJECT]->(obj)
         SET r.sourceText  = row.sourceText,
             r.dmlType     = row.dmlType,
             r.dbName      = row.dbName,
@@ -485,7 +500,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
     CALL apoc.do.case(
       [
         row.dmlType = "SELECT",
-        ''MERGE (srcPrc)-[r:SELECTS_FROM {sourceLine: row.sourceLine}]->(obj)
+        ''MERGE (srcPrc)-[r:SELECTS_FROM ]->(obj)
           SET r.sourceText  = row.sourceText,
               r.dbName      = row.dbName,
               r.projectName = row.projectName,
@@ -524,7 +539,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
               r.jobId       = row.jobId
           RETURN r''
       ],
-      ''MERGE (srcPrc)-[r:ACCESSES_DB_OBJECT {sourceLine: row.sourceLine}]->(obj)
+      ''MERGE (srcPrc)-[r:ACCESSES_DB_OBJECT ]->(obj)
         SET r.sourceText  = row.sourceText,
             r.dmlType     = row.dmlType,
             r.dbName      = row.dbName,
@@ -596,7 +611,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
     BEGIN
       v_jobid:=neoj_apex_structure_seq.nextval;
       FOR c IN (
-            SELECT aapr.application_id, aapr.application_name, aapr.page_id, aapr.page_name,
+            SELECT aapr.application_id, aapr.application_name, aapr.workspace,   aapr.page_id, aapr.page_name,
                    aapr.region_name, aapr.table_owner, aapr.table_name, aapr.query_type,
                    aapr.region_source, aapr.source_type, aapr.REGION_ID,
                    SYS_CONTEXT('USERENV', 'DB_NAME') dbName, pv_project_name project_name
@@ -605,13 +620,14 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
                 and aapr.APPLICATION_ID=pn_app_id
                 and (pv_workspace is null or upper(aapr.workspace) = upper(pv_workspace))
                 and (pn_page_id is null or aapr.page_id = pn_page_id)                
-                AND query_type IN ('SQL Query')            
+                AND query_type IN ('Table', 'SQL Query')            
       ) LOOP
         -- Replace all bind variables with the specified value
         v_region_source := REGEXP_REPLACE(c.region_source, '\:\w+', '''' || v_bind_variable_value || '''');
         -- v_create_view := 'CREATE VIEW RCM72_BRISI_ZBLJ AS SELECT OI.* FROM NEOJ_ORDERS O JOIN NEOJ_ORDER_ITEMS OI ON O.ORDER_ID=OI.ORDER_ID';        
         -- Execute the modified SQL query dynamically
         v_create_view:='CREATE VIEW RCM72_BRISI_ZBLJ as '||v_region_source;
+        
         
         begin
             EXECUTE IMMEDIATE 'DROP VIEW RCM72_BRISI_ZBLJ';
@@ -622,20 +638,20 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
             values (                        v_jobid,        'neo4jUtils',
                                             'getTablesFromRegions',     '10 EXECUTE IMMEDIATE drop view',    DBMS_UTILITY.FORMAT_ERROR_STACK || CHR(13) || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE                        
             );
-        end;
-      
-        
-        BEGIN
-            EXECUTE IMMEDIATE v_create_view;
-        EXCEPTION WHEN OTHERS THEN
-            insert into neoj_apex_exceptions(jobid,          package_name,
-                                             procedure_name, exception_id,   err_msg
-                                            )
-            values (                        v_jobid,        'neo4jUtils',
-                                            'getTablesFromRegions',     '20 EXECUTE IMMEDIATE v_create_view',    DBMS_UTILITY.FORMAT_ERROR_STACK || CHR(13) || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE|| CHR(13)  || v_create_view                        
-            );
-        END;
+        end;      
 
+        IF c.query_type='SQL Query' then
+            BEGIN
+                EXECUTE IMMEDIATE v_create_view;
+            EXCEPTION WHEN OTHERS THEN
+                insert into neoj_apex_exceptions(jobid,          package_name,
+                                                 procedure_name, exception_id,   err_msg
+                                                )
+                values (                        v_jobid,        'neo4jUtils',
+                                                'getTablesFromRegions',     '20 EXECUTE IMMEDIATE v_create_view',    DBMS_UTILITY.FORMAT_ERROR_STACK || CHR(13) || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE|| CHR(13)  || v_create_view                        
+                );
+            END;
+        END IF;
 
         BEGIN
             INSERT INTO neoj_apex_structure (jobid,
@@ -653,7 +669,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
                 c.region_name, 
                 c.table_owner, 
                 c.table_name, 
-                c.query_type, 
+                upper(c.query_type), 
                 c.region_source, 
                 c.source_type, 
                 to_char(c.REGION_ID),
@@ -669,59 +685,88 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
         END;   
 
 
-        FOR dep in ( select ad.owner, ad.name, ad.referenced_owner, ad.referenced_name, ad.referenced_type, SYS_CONTEXT('USERENV', 'DB_NAME') dbName,  pv_project_name project_name
-                        from all_dependencies ad
-                        where ad.name='RCM72_BRISI_ZBLJ'
-                    ) loop
-            IF dep.referenced_type='SYNONYM' THEN
-                    for depSyn in (select asyn.owner, asyn.synonym_name, asyn.table_owner, asyn.table_name, SYS_CONTEXT('USERENV', 'DB_NAME') dbName, pv_project_name project_name
-                                    from all_synonyms asyn 
-                                    --join all_objects ao on asyn.TABLE_OWNER=ao.OWNER and asyn.TABLE_NAME=ao.OBJECT_NAME
-                                    where asyn.owner=dep.referenced_owner AND asyn.SYNONYM_NAME=dep.referenced_name
-                                    ) loop
-                        BEGIN
+        IF c.query_type='SQL Query' then        
+            FOR dep in ( select ad.owner, ad.name, ad.referenced_owner, ad.referenced_name, ad.referenced_type, SYS_CONTEXT('USERENV', 'DB_NAME') dbName,  pv_project_name project_name
+                            from all_dependencies ad
+                            where ad.name='RCM72_BRISI_ZBLJ'
+                        ) loop
+                IF dep.referenced_type='SYNONYM' THEN
+                        for depSyn in (select asyn.owner, asyn.synonym_name, asyn.table_owner, asyn.table_name, SYS_CONTEXT('USERENV', 'DB_NAME') dbName, pv_project_name project_name
+                                        from all_synonyms asyn 
+                                        --join all_objects ao on asyn.TABLE_OWNER=ao.OWNER and asyn.TABLE_NAME=ao.OBJECT_NAME
+                                        where asyn.owner=dep.referenced_owner AND asyn.SYNONYM_NAME=dep.referenced_name
+                                        ) loop
+                            BEGIN
+                                insert into neoj_apex_structure_tables( jobid,          dbName,     application_id,
+                                                                        page_id,        REGION_ID,  
+                                                                        table_owner,    table_name, table_type,
+                                                                        project_name
+                                                                      )
+                                values (                                v_jobid,    c.dbName,   c.application_id, 
+                                                                        c.page_id,  c.REGION_ID,
+                                                                        depSyn.table_owner, depSyn.table_name, null,
+                                                                        c.project_name
+                                        );
+                            EXCEPTION WHEN OTHERS THEN
+                                insert into neoj_apex_exceptions(jobid,          package_name,
+                                                                 procedure_name, exception_id,   err_msg
+                                                                )
+                                values (                        v_jobid,        'neo4jUtils',
+                                                                'getTablesFromRegions',     '40 insert into neoj_apex_structure_tables',    DBMS_UTILITY.FORMAT_ERROR_STACK || CHR(13) || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE                        
+                                );
+                            END;                                                
+
+                        end loop;
+                ELSE  -- not SYNONYM
+                    BEGIN
+                        insert into neoj_apex_structure_tables( jobid,          dbName,     application_id,
+                                                                page_id,        REGION_ID,  
+                                                                table_owner,    table_name, table_type,
+                                                                project_name
+                                                              )
+                        values (                                v_jobid,    c.dbName,   c.application_id, 
+                                                                c.page_id,  c.REGION_ID,
+                                                                dep.REFERENCED_OWNER,   dep.REFERENCED_NAME, dep.REFERENCED_TYPE,
+                                                                c.project_name
+                                );
+                    EXCEPTION WHEN OTHERS THEN
+                        insert into neoj_apex_exceptions(jobid,          package_name,
+                                                         procedure_name, exception_id,   err_msg
+                                                        )
+                        values (                        v_jobid,        'neo4jUtils',
+                                                        'getTablesFromRegions',     '50 insert into neoj_apex_exceptions',    DBMS_UTILITY.FORMAT_ERROR_BACKTRACE                        
+                        );
+                    END;                                                                            
+                END IF;
+            END LOOP;  -- dep dependencies end loop
+        ELSE --table
+                    BEGIN          
+                        for crud in (   select attr.APPLICATION_ID, attr.WORKSPACE, to_char(attr.REGION_ID) REGION_ID ,  attr.IS_EDITABLE, attr.EDIT_OPERATIONS
+                                        from APEX_APPL_PAGE_IGS attr    
+                                        where attr.application_id= c.application_id and attr.WORKSPACE = c.workspace and attr.region_id=c.region_id    
+                                    ) 
+                        loop                                            
                             insert into neoj_apex_structure_tables( jobid,          dbName,     application_id,
                                                                     page_id,        REGION_ID,  
                                                                     table_owner,    table_name, table_type,
-                                                                    project_name
+                                                                    project_name,   IS_EDITABLE, EDIT_OPERATIONS    
                                                                   )
-                            values (                                v_jobid,    c.dbName,   c.application_id, 
-                                                                    c.page_id,  c.REGION_ID,
-                                                                    depSyn.table_owner, depSyn.table_name, null,
-                                                                    c.project_name
+                            values (                                v_jobid,    c.dbName,   c.application_id,
+                                                                    c.page_id,  c.REGION_ID,                                                                
+    --                                                                c.table_owner, c.table_name, c.query_type,
+                                                                    COALESCE(c.table_owner, APEX_APPLICATION_ADMIN.GET_PARSING_SCHEMA(c.application_id)),  c.table_name, upper(c.query_type), 
+                                                                    c.project_name, crud.is_editable, crud.edit_operations
                                     );
-                        EXCEPTION WHEN OTHERS THEN
-                            insert into neoj_apex_exceptions(jobid,          package_name,
-                                                             procedure_name, exception_id,   err_msg
-                                                            )
-                            values (                        v_jobid,        'neo4jUtils',
-                                                            'getTablesFromRegions',     '40 insert into neoj_apex_structure_tables',    DBMS_UTILITY.FORMAT_ERROR_STACK || CHR(13) || DBMS_UTILITY.FORMAT_ERROR_BACKTRACE                        
-                            );
-                        END;                                                
-
-                    end loop;
-            ELSE
-                BEGIN
-                    insert into neoj_apex_structure_tables( jobid,          dbName,     application_id,
-                                                            page_id,        REGION_ID,  
-                                                            table_owner,    table_name, table_type,
-                                                            project_name
-                                                          )
-                    values (                                v_jobid,    c.dbName,   c.application_id, 
-                                                            c.page_id,  c.REGION_ID,
-                                                            dep.REFERENCED_OWNER,   dep.REFERENCED_NAME, dep.REFERENCED_TYPE,
-                                                            c.project_name
-                            );
-                EXCEPTION WHEN OTHERS THEN
-                    insert into neoj_apex_exceptions(jobid,          package_name,
-                                                     procedure_name, exception_id,   err_msg
-                                                    )
-                    values (                        v_jobid,        'neo4jUtils',
-                                                    'getTablesFromRegions',     '50 insert into neoj_apex_exceptions',    DBMS_UTILITY.FORMAT_ERROR_BACKTRACE                        
-                    );
-                END;                                                                            
-            END IF;
-        END LOOP;  -- dep dependencies end loop        
+                        end loop;
+                    EXCEPTION WHEN OTHERS THEN
+                        insert into neoj_apex_exceptions(jobid,          package_name,
+                                                         procedure_name, exception_id,   err_msg
+                                                        )
+                        values (                        v_jobid,        'neo4jUtils',
+                                                        'getTablesFromRegions',     '60 insert into neoj_apex_exceptions',    DBMS_UTILITY.FORMAT_ERROR_BACKTRACE                        
+                        );
+                    END;            
+        END IF;
       END LOOP; -- c end loop
       return v_jobid;
     END;    
@@ -862,7 +907,9 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
           project_name,
           table_owner,
           table_name,
-          table_type
+          table_type,
+          is_editable,
+          edit_operations
         FROM neoj_apex_structure_tables
         WHERE jobid = pn_JOBID   -- <=== bind variable in SQL Workshop
         ORDER BY application_id, page_id, region_id
@@ -879,16 +926,63 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
         
         -- Assuming table_owner and tableName are written as a single JSON object
         IF rec.table_owner IS NOT NULL OR rec.table_name IS NOT NULL THEN
-          apex_json.open_object('table');
+            apex_json.open_object('table');
+              
+            apex_json.write('owner',         rec.table_owner);
+            apex_json.write('name',          rec.table_name);
+            apex_json.write('type',          rec.table_type);
+            apex_json.write('is_editable',   rec.is_editable);
+            apex_json.write('edit_operations',   rec.edit_operations);
+            apex_json.write('edge_type',     'SELECTS_FROM');
+
+            apex_json.close_object;  -- table object          
+            
           
-          apex_json.write('owner',         rec.table_owner);
-          apex_json.write('name',          rec.table_name);
-          apex_json.write('type',          rec.table_type);
           
-          apex_json.close_object;  -- table object
         END IF;
         
         apex_json.close_object;  -- main object
+        
+        
+        
+            IF rec.is_editable='Yes' then
+
+                for crud in (SELECT REGEXP_SUBSTR(rec.edit_operations, '[^:]+', 1, LEVEL) AS element
+                                FROM DUAL
+                                CONNECT BY REGEXP_SUBSTR(rec.edit_operations, '[^:]+', 1, LEVEL) IS NOT NULL
+                                ) loop
+                                
+                                    apex_json.open_object;
+                                    
+                                    apex_json.write('jobId',          rec.jobid);
+                                    apex_json.write('dbName',         rec.dbName);
+                                    apex_json.write('applicationId',  rec.application_id);
+                                    apex_json.write('pageId',         rec.page_id);
+                                    apex_json.write('regionId',       rec.region_id);
+                                    apex_json.write('projectName',    rec.project_name);
+                                    
+                                    -- Assuming table_owner and tableName are written as a single JSON object
+                                    IF rec.table_owner IS NOT NULL OR rec.table_name IS NOT NULL THEN
+                                        apex_json.open_object('table');
+                                          
+                                        apex_json.write('owner',         rec.table_owner);
+                                        apex_json.write('name',          rec.table_name);
+                                        apex_json.write('type',          rec.table_type);
+                                        apex_json.write('is_editable',   rec.is_editable);
+                                        apex_json.write('edit_operations',   rec.edit_operations);
+                                        if (upper(crud.element)='I') then
+                                            apex_json.write('edge_type',     'INSERTS_INTO');
+                                        elsif (upper(crud.element)='D') then
+                                            apex_json.write('edge_type',     'DELETES_FROM');
+                                        elsif (upper(crud.element)='U') then
+                                            apex_json.write('edge_type',     'UPDATES');                                            
+                                        end if;
+
+                                        apex_json.close_object;  -- table object     
+                                    END IF;
+                        apex_json.close_object;  -- main object                                    
+                end loop;
+            END IF;        
       END LOOP;
 
       apex_json.close_array;  -- data
@@ -916,7 +1010,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
                         pvOutputType,  
                         pvApexUrl, 
                         pvOutCypher , 
-                        pvOutFile  
+                        pvOutFile
                         ); 
                         
     
@@ -946,18 +1040,21 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
                     UNWIND value.data AS row
 
                     MERGE (app:APEXApp {applicationId: row.applicationId})
-                      SET app.name   = row.dbName+"."+row.applicationName,
+                      SET app.id_rc       = coalesce(row.id_rc, randomUUID()),
+                          app.name   = row.dbName+"."+row.applicationName,
                           app.dbName = row.dbName,
                           app.projectName = row.projectName
 
                     MERGE (page:APEXPage {applicationId: row.applicationId, pageId: row.pageId})
-                      SET page.name = row.dbName+"."+row.applicationName+"."+ row.pageName,
+                      SET page.id_rc       = coalesce(row.id_rc, randomUUID()),
+                          page.name = row.dbName+"."+row.applicationName+"."+ row.pageName,
                           page.dbName = row.dbName,
                           page.projectName = row.projectName
                     MERGE (app)-[:HAS_PAGE]->(page)
 
                     MERGE (reg:APEXRegion {regionId: row.regionId})   // string
-                      SET reg.name          = row.dbName+"."+row.applicationName+"."+ row.pageName+"."+row.regionName ,
+                      SET reg.id_rc       = coalesce(row.id_rc, randomUUID()),
+                          reg.name          = row.dbName+"."+row.applicationName+"."+ row.pageName+"."+row.regionName ,
                           reg.dbName = row.dbName,
                           reg.projectName = row.projectName,
                           reg.sourceType    = row.sourceType,
@@ -990,10 +1087,17 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
     end;
     
         
-    procedure getCypherAppTables(pvOutputSource in varchar2,  pn_JOBID in number, pvOutputType in varchar2, pvApexUrl in varchar2, pvOutCypher out clob, pvOutFile out clob)  as
-        lnCypher varchar2(32000);
+    procedure getCypherAppTables(pvOutputSource in varchar2,  
+                                 pn_JOBID in number, 
+                                 pvOutputType in varchar2, 
+                                 pvApexUrl in varchar2, 
+                                 pvOutCypher out clob, 
+                                 pvOutFile out clob)  as                                
+        lnCypher varchar2(32000);       
+        lnCypherCRUD varchar2(32000);
         lnPowerShell varchar2(32000);
         t number;
+        i number;
     begin
     
     
@@ -1007,14 +1111,16 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
                 UNWIND value.data AS row
 
                 WITH row,
+                     coalesce(row.edge_type, row.table.edge_type, ''SELECTS_FROM'') AS edge_type,
                      coalesce(row.tableOwner, row.referencedOwner, row.owner, row.table.owner, "") AS owner,
                      coalesce(row.tableName,  row.referencedName,  row.name,  row.table.name,  "") AS tname,
                      row.dbName + "." +
                      coalesce(row.tableOwner, row.referencedOwner, row.owner, row.table.owner, "") + "." +
                      coalesce(row.tableName, row.referencedName, row.name, row.table.name, "") AS fullName
 
-                MERGE (tab:ORATable {name: fullName})
-                SET tab.dbName      = row.dbName,
+                MERGE (tab:ORADbObject {name: fullName})
+                SET tab.id_rc       = coalesce(tab.id_rc, randomUUID()),
+                    tab.dbName      = row.dbName,
                     tab.owner       = owner,
                     tab.shortName   = tname,
                     tab.projectName = row.projectName,
@@ -1022,28 +1128,28 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
                     tab.jobId       = row.jobId,
                     tab.fullName    = fullName
 
-                WITH row, tab
+                WITH row, tab, edge_type
                 MATCH (s:APEXRegion)
                 WHERE toString(s.regionId) = toString(row.regionId)
-                MERGE (s)-[:USES_TABLE]->(tab)';
-  
-
+                CALL apoc.merge.relationship(s, edge_type, {}, {}, tab) YIELD rel RETURN count(rel)';
+                             
                       
         if upper(pvOutputType) in ('HTTP','HTTPS','URL','CYPHER') then  
             lnCypher:=replace(lnCypher,'<<WITH "<<pvUrl>><<pn_JOBID>>" AS url','WITH "<<pvUrl>><<pn_JOBID>>" AS url');            
             lnCypher:=replace(lnCypher,'<<url>>', 'url');
             lnCypher:=replace(lnCypher,'<<pn_JOBID>>', pn_JOBID);                 
-            lnCypher:=replace(lnCypher,'<<pvUrl>>',pvApexUrl);
+            lnCypher:=replace(lnCypher,'<<pvUrl>>',pvApexUrl);                        
         elsif upper(pvOutputType)='FILE' then
             lnCypher:=replace(lnCypher,'<<WITH "<<pvUrl>><<pn_JOBID>>" AS url','');
             lnCypher:=replace(lnCypher,'<<url>>', '"export<<pn_JOBID>>.json"');
-            lnCypher:=replace(lnCypher,'<<pn_JOBID>>',pn_JOBID); 
+            lnCypher:=replace(lnCypher,'<<pn_JOBID>>',pn_JOBID);            
             
             lnPowerShell:='Invoke-WebRequest "<<pvApexUrl>><<pn_JOBID>>"`
                         -UseDefaultCredentials `
                         -OutFile "export'||'<<pn_JOBID>>'||'.json"';
             lnPowerShell:=replace(lnPowerShell,'<<pvApexUrl>>',pvApexUrl);
-            lnPowerShell:=replace(lnPowerShell,'<<pn_JOBID>>',pn_JOBID);             
+            lnPowerShell:=replace(lnPowerShell,'<<pn_JOBID>>',pn_JOBID);  
+                      
         else
             t:=1/0;
         end if;
@@ -1693,6 +1799,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
                lvSource
             || 'MERGE (btn:APEXButton {applicationId: row.applicationId, pageId: row.pageId, buttonId: row.buttonId}) ' || chr(10)
             || '  SET btn.name = row.dbName + "." + row.applicationName + "." + row.pageName + "." + row.buttonName, ' || chr(10)
+            || '      btn.id_rc       = coalesce(row.id_rc, randomUUID()),' || chr(10)
             || '      btn.dbName = row.dbName, ' || chr(10)
             || '      btn.projectName = row.projectName, ' || chr(10)
             || '      btn.workspace = row.workspace, ' || chr(10)
@@ -1806,6 +1913,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
                lvSource
             || 'MERGE (da:APEXDynamicAction {applicationId: row.applicationId, pageId: row.pageId, dynamicActionId: row.dynamicActionId}) ' || chr(10)
             || '  SET da.name = row.dbName + "." + row.applicationName + "." + row.pageName + "." + row.dynamicActionName, ' || chr(10)
+            || '      btn.id_rc       = coalesce(row.id_rc, randomUUID()),' || chr(10)
             || '      da.dbName = row.dbName, ' || chr(10)
             || '      da.projectName = row.projectName, ' || chr(10)
             || '      da.workspace = row.workspace, ' || chr(10)
@@ -1842,6 +1950,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
                lvSource
             || 'MERGE (act:APEXDynamicActionStep {applicationId: row.applicationId, pageId: row.pageId, dynamicActionId: row.dynamicActionId, actionId: row.actionId}) ' || chr(10)
             || '  SET act.name = row.actionName, ' || chr(10)
+            || '      btn.id_rc       = coalesce(row.id_rc, randomUUID()),' || chr(10)
             || '      act.dbName = row.dbName, ' || chr(10)
             || '      act.projectName = row.projectName, ' || chr(10)
             || '      act.workspace = row.workspace, ' || chr(10)
@@ -1881,6 +1990,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
                lvSource
             || 'MERGE (proc:APEXPageProcess {applicationId: row.applicationId, pageId: row.pageId, processId: row.processId}) ' || chr(10)
             || '  SET proc.name = row.dbName + "." + row.applicationName + "." + row.pageName + "." + row.processName, ' || chr(10)
+            || '      btn.id_rc       = coalesce(row.id_rc, randomUUID()),' || chr(10)
             || '      proc.dbName = row.dbName, ' || chr(10)
             || '      proc.projectName = row.projectName, ' || chr(10)
             || '      proc.workspace = row.workspace, ' || chr(10)
@@ -2753,6 +2863,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
         l_calls      t_call_tab;
         l_dbname     varchar2(128) := sys_context('USERENV', 'DB_NAME');
     begin
+        dbms_output.put_line('***********************  loadApexPageProcPkgPrcCalls      **************************');
         for rec in (
             select
                 p.jobid,
@@ -2778,12 +2889,19 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
               and p.process_source is not null
         )
         loop
+            dbms_output.put_line('***********************  loadApexPageProcPkgPrcCalls - extract_package_procedure_calls start    **************************');
+            dbms_output.put_line(rec.code_txt);
             extract_package_procedure_calls(
                 p_code  => rec.code_txt,
                 p_calls => l_calls
             );
+            
+            dbms_output.put_line(l_calls.count);
+            dbms_output.put_line('***********************  loadApexPageProcPkgPrcCalls - extract_package_procedure_calls end    **************************');
 
-            if l_calls.count > 0 then
+
+
+            if l_calls.count > 0 then            
                 for i in 1 .. l_calls.count loop
                     begin
                         insert into neoj_apex_package_procedure (
@@ -2837,6 +2955,8 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
                                 or upper(p.owner) = upper(l_calls(i).owner_name)
                               )
                           and rownum = 1;
+                          
+                          dbms_output.put_line('***********************  loadApexPageProcPkgPrcCalls - neoj_apex_package_procedure insert    **************************');
 
                     exception
                         when dup_val_on_index then
@@ -3149,52 +3269,27 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
     end loadIdentOraCallsForPackage;
     */
     
-    procedure loadIdentOraCallsForPackage(
-        pn_JOBID         in number,
-        pv_owner         in varchar2,
-        pv_package_name  in varchar2,
-        pv_project_name  in varchar2 default 'DemoNeo4j'
-    )
-    as
-        l_dbname varchar2(128) := sys_context('USERENV', 'DB_NAME');
-    begin
-        insert into neoj_ora_package_procedure (
-            jobid,
-            dbname,
-            project_name,
-            source_owner,
-            source_package,
-            source_procedure,
-            source_line,
-            owner,
-            object_name,
-            procedure_name,
-            source_full_name,
-            object_full_name,
-            procedure_full_name,
-            signature,
-            usage,
-            last_updated_by,
-            last_updated_on
-        )
+procedure loadIdentOraCallsForPackage(
+    pn_JOBID         in number,
+    pv_owner         in varchar2,
+    pv_package_name  in varchar2,
+    pv_project_name  in varchar2 default 'DemoNeo4j'
+)
+as
+    l_dbname varchar2(128) := sys_context('USERENV', 'DB_NAME');
+    l_count  number := 0;
+begin
+    for r in (
         select distinct
-            pn_JOBID,
-            l_dbname,
-            pv_project_name,
             ai.owner as source_owner,
             ai.object_name as source_package,
             t.name as source_procedure,
             ai.line as source_line,
-            ap.owner as owner,
-            ap.object_name as object_name,
-            ap.procedure_name as procedure_name,
-            l_dbname || '.' || ai.owner || '.' || ai.object_name as source_full_name,
-            l_dbname || '.' || ap.owner || '.' || ap.object_name as object_full_name,
-            l_dbname || '.' || ap.owner || '.' || ap.object_name || '.' || ap.procedure_name as procedure_full_name,
+            ap.owner as target_owner,
+            ap.object_name as target_object,
+            ap.procedure_name as target_procedure,
             ai.signature,
-            ai.usage,
-            user as last_updated_by,
-            sysdate as last_updated_on
+            ai.usage
         from all_identifiers ai
         join all_identifiers_lines_tmp t
           on t.owner = ai.owner
@@ -3211,22 +3306,55 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
           and ai.usage = 'CALL'
           and ai.type in ('PROCEDURE', 'FUNCTION')
           and t.usage = 'DEFINITION'
---          and upper(ap.owner) not in ('SYS', 'SYSTEM', 'MDSYS')
           and upper(ap.object_name) not like 'APEX\_%' escape '\'
           and upper(ap.object_name) not like 'DBMS\_%' escape '\'
-          and upper(ap.object_name) not like 'UTL\_%'  escape '\';
-
-    exception
-        when dup_val_on_index then
-            null;
-        when others then
-            insert into neoj_apex_exceptions(
-                jobid, package_name, procedure_name, exception_id, err_msg
+          and upper(ap.object_name) not like 'UTL\_%'  escape '\'
+    ) loop
+        begin
+            insert into neoj_ora_package_procedure (
+                jobid, dbname, project_name, source_owner, source_package,
+                source_procedure, source_line, owner, object_name, procedure_name,
+                source_full_name, object_full_name, procedure_full_name,
+                signature, usage, last_updated_by, last_updated_on
             ) values (
-                pn_JOBID, 'neo4jUtils', 'loadIdentOraCallsForPackage', 'OTHERS',
-                dbms_utility.format_error_stack || chr(13) || dbms_utility.format_error_backtrace
+                pn_JOBID,
+                l_dbname,
+                pv_project_name,
+                r.source_owner,
+                r.source_package,
+                r.source_procedure,
+                r.source_line,
+                r.target_owner,
+                r.target_object,
+                r.target_procedure,
+                l_dbname || '.' || r.source_owner || '.' || r.source_package,
+                l_dbname || '.' || r.target_owner || '.' || r.target_object,
+                l_dbname || '.' || r.target_owner || '.' || r.target_object || '.' || r.target_procedure,
+                r.signature,
+                r.usage,
+                user,
+                sysdate
             );
-    end loadIdentOraCallsForPackage; 
+            l_count := l_count + 1;
+        exception
+            when dup_val_on_index then
+                -- Logiramo podvojen zapis, a nadaljujemo zanko
+                dbms_output.put_line('Preskoèen duplikat: ' || r.signature);
+        end;
+    end loop;
+
+    dbms_output.put_line('neoj_ora_package_procedure ' || l_count);
+
+exception
+    when others then
+        insert into neoj_apex_exceptions(
+            jobid, package_name, procedure_name, exception_id, err_msg
+        ) values (
+            pn_JOBID, 'neo4jUtils', 'loadIdentOraCallsForPackage', 'OTHERS',
+            dbms_utility.format_error_stack || chr(13) || dbms_utility.format_error_backtrace
+        );
+end loadIdentOraCallsForPackage;
+
     
     
     procedure loadIdentOraCRUDForPackage(
@@ -3238,162 +3366,87 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
     as
         l_dbname varchar2(128) := sys_context('USERENV', 'DB_NAME');
     begin
-        insert into neoj_ora_package_procedure_crud (
-            jobid,
-            dbname,
-            project_name,
-            package_owner,
-            package_name,
-            procedure_name,
-            proc_start_line,
-            proc_end_line,
-            source_line,
-            table_owner,
-            table_name,
-            ref_type,
-            dml_type,
-            source_text,
-            package_full_name,
-            procedure_full_name,
-            object_full_name,
-            last_updated_by,
-            last_updated_on
-        )
-        select distinct
-            pn_JOBID,
-            l_dbname,
-            pv_project_name,
-
-            l_tmp.owner                                                as package_owner,
-            l_tmp.object_name                                          as package_name,
-            l_tmp.name                                                 as procedure_name,
-            l_tmp.proc_from                                            as proc_start_line,
-            l_tmp.proc_to                                              as proc_end_line,
-            all_s.line                                                 as source_line,
-
-            case d.referenced_type
-                when 'SYNONYM' then s.table_owner
-                else d.referenced_owner
-            end                                                        as table_owner,
-
-            case d.referenced_type
-                when 'SYNONYM' then s.table_name
-                else d.referenced_name
-            end                                                        as table_name,
-
-            d.referenced_type                                          as ref_type,
-
-            case
-                when regexp_like(
-                         upper(all_s.text),
-                         'INSERT\s+(INTO\s+)?' ||
-                         case d.referenced_type
-                             when 'SYNONYM' then upper(s.table_name)
-                             else upper(d.referenced_name)
-                         end,
-                         'i'
-                     )
-                then 'INSERT'
-
-                when regexp_like(
-                         upper(all_s.text),
-                         'UPDATE\s+' ||
-                         case d.referenced_type
-                             when 'SYNONYM' then upper(s.table_name)
-                             else upper(d.referenced_name)
-                         end,
-                         'i'
-                     )
-                then 'UPDATE'
-
-                when regexp_like(
-                         upper(all_s.text),
-                         'DELETE\s+FROM\s+' ||
-                         case d.referenced_type
-                             when 'SYNONYM' then upper(s.table_name)
-                             else upper(d.referenced_name)
-                         end,
-                         'i'
-                     )
-                then 'DELETE'
-
-                when regexp_like(
-                         upper(all_s.text),
-                         'MERGE\s+INTO\s+' ||
-                         case d.referenced_type
-                             when 'SYNONYM' then upper(s.table_name)
-                             else upper(d.referenced_name)
-                         end,
-                         'i'
-                     )
-                then 'MERGE'
-
-                when regexp_like(
-                         upper(all_s.text),
-                         '(FROM|JOIN)\s+' ||
-                         case d.referenced_type
-                             when 'SYNONYM' then upper(s.table_name)
-                             else upper(d.referenced_name)
-                         end,
-                         'i'
-                     )
-                then 'SELECT'
-
-                else '? (multi-line)'
-            end                                                        as dml_type,
-
-            trim(all_s.text)                                           as source_text,
-
-            l_dbname || '.' || l_tmp.owner || '.' || l_tmp.object_name as package_full_name,
-            l_dbname || '.' || l_tmp.owner || '.' || l_tmp.object_name || '.' || l_tmp.name
-                                                                       as procedure_full_name,
-            l_dbname || '.' ||
-            case d.referenced_type
-                when 'SYNONYM' then s.table_owner
-                else d.referenced_owner
-            end || '.' ||
-            case d.referenced_type
-                when 'SYNONYM' then s.table_name
-                else d.referenced_name
-            end                                                        as object_full_name,
-
-            user                                                       as last_updated_by,
-            sysdate                                                    as last_updated_on
-        from all_source all_s
-        join all_identifiers_lines_tmp l_tmp
-          on all_s.owner = l_tmp.owner
-         and all_s.name  = l_tmp.object_name
-         and all_s.line between l_tmp.proc_from and l_tmp.proc_to
-        join all_dependencies d
-          on d.owner = all_s.owner
-         and d.name  = all_s.name
-        left join all_synonyms s
-          on s.owner        = d.referenced_owner
-         and s.synonym_name = d.referenced_name
-        where upper(all_s.owner) = upper(pv_owner)
-          and upper(all_s.name) like upper(pv_package_name)
-          and all_s.type = 'PACKAGE BODY'
-          and d.referenced_type in ('TABLE', 'VIEW', 'SYNONYM', 'SEQUENCE')
-          and upper(all_s.text) like '%' ||
-              upper(
-                  case d.referenced_type
-                      when 'SYNONYM' then s.table_name
-                      else d.referenced_name
-                  end
-              ) || '%';
-/*
-    exception
-        when dup_val_on_index then
-            null;
-        when others then
-            insert into neoj_apex_exceptions(
-                jobid, package_name, procedure_name, exception_id, err_msg
-            ) values (
-                pn_JOBID, 'neo4jUtils', 'loadIdentOraCRUDForPackage', 'OTHERS',
-                dbms_utility.format_error_stack || chr(13) || dbms_utility.format_error_backtrace
-            );
-*/            
-    end loadIdentOraCRUDForPackage;           
+        for r in (
+            select distinct
+                pn_JOBID as jobid,
+                l_dbname as dbname,
+                pv_project_name as project_name,
+                l_tmp.owner                                                as package_owner,
+                l_tmp.object_name                                          as package_name,
+                l_tmp.name                                                 as procedure_name,
+                l_tmp.proc_from                                            as proc_start_line,
+                l_tmp.proc_to                                              as proc_end_line,
+                all_s.line                                                 as source_line,
+                case d.referenced_type
+                    when 'SYNONYM' then s.table_owner
+                    else d.referenced_owner
+                end                                                        as table_owner,
+                case d.referenced_type
+                    when 'SYNONYM' then s.table_name
+                    else d.referenced_name
+                end                                                        as table_name,
+                d.referenced_type                                          as ref_type,
+                case
+                    when regexp_like(upper(all_s.text), 'INSERT\s+(INTO\s+)?' || case d.referenced_type when 'SYNONYM' then upper(s.table_name) else upper(d.referenced_name) end, 'i') then 'INSERT'
+                    when regexp_like(upper(all_s.text), 'UPDATE\s+' || case d.referenced_type when 'SYNONYM' then upper(s.table_name) else upper(d.referenced_name) end, 'i') then 'UPDATE'
+                    when regexp_like(upper(all_s.text), 'DELETE\s+FROM\s+' || case d.referenced_type when 'SYNONYM' then upper(s.table_name) else upper(d.referenced_name) end, 'i') then 'DELETE'
+                    when regexp_like(upper(all_s.text), 'MERGE\s+INTO\s+' || case d.referenced_type when 'SYNONYM' then upper(s.table_name) else upper(d.referenced_name) end, 'i') then 'MERGE'
+                    when regexp_like(upper(all_s.text), '(FROM|JOIN)\s+' || case d.referenced_type when 'SYNONYM' then upper(s.table_name) else upper(d.referenced_name) end, 'i') then 'SELECT'
+                    else '? (multi-line)'
+                end                                                        as dml_type,
+                trim(all_s.text)                                           as source_text,
+                l_dbname || '.' || l_tmp.owner || '.' || l_tmp.object_name as package_full_name,
+                l_dbname || '.' || l_tmp.owner || '.' || l_tmp.object_name || '.' || l_tmp.name as procedure_full_name,
+                l_dbname || '.' || case d.referenced_type when 'SYNONYM' then s.table_owner else d.referenced_owner end || '.' || case d.referenced_type when 'SYNONYM' then s.table_name else d.referenced_name end as object_full_name,
+                user                                                       as last_updated_by,
+                sysdate                                                    as last_updated_on
+            from all_source all_s
+            join all_identifiers_lines_tmp l_tmp
+              on all_s.owner = l_tmp.owner
+             and all_s.name  = l_tmp.object_name
+             and all_s.line between l_tmp.proc_from and l_tmp.proc_to
+            join all_dependencies d
+              on d.owner = all_s.owner
+             and d.name  = all_s.name
+            left join all_synonyms s
+              on s.owner        = d.referenced_owner
+             and s.synonym_name = d.referenced_name
+            where upper(all_s.owner) = upper(pv_owner)
+              and upper(all_s.name) like upper(pv_package_name)
+              and all_s.type = 'PACKAGE BODY'
+              and d.referenced_type in ('TABLE', 'VIEW', 'SYNONYM', 'SEQUENCE')
+              and upper(all_s.text) like '%' || upper(case d.referenced_type when 'SYNONYM' then s.table_name else d.referenced_name end) || '%'
+        ) loop
+            begin
+                insert into neoj_ora_package_procedure_crud (
+                    jobid, dbname, project_name, package_owner, package_name,
+                    procedure_name, proc_start_line, proc_end_line, source_line,
+                    table_owner, table_name, ref_type, dml_type, source_text,
+                    package_full_name, procedure_full_name, object_full_name,
+                    last_updated_by, last_updated_on
+                ) values (
+                    r.jobid, r.dbname, r.project_name, r.package_owner, r.package_name,
+                    r.procedure_name, r.proc_start_line, r.proc_end_line, r.source_line,
+                    r.table_owner, r.table_name, r.ref_type, r.dml_type, r.source_text,
+                    r.package_full_name, r.procedure_full_name, r.object_full_name,
+                    r.last_updated_by, r.last_updated_on
+                );
+            exception
+                when dup_val_on_index then
+                    null; -- Preskoèi, èe zapis že obstaja
+                when others then
+                    insert into neoj_apex_exceptions(
+                        jobid, package_name, procedure_name, exception_id, err_msg
+                    ) values (
+                        pn_JOBID, 'neo4jUtils', 'loadIdentOraCRUDForPackage', 'ROW_LEVEL_ERROR',
+                        dbms_utility.format_error_stack || ' Line: ' || r.source_line
+                    );
+            end;
+        end loop;
+    end loadIdentOraCRUDForPackage;
+    
+    
+  
 
     procedure export_apex_button_proc_calls(
         pn_JOBID        in number,
@@ -3648,6 +3701,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
         la.createdAt      = row.createdAt,
         la.projectName    = row.projectName,
         la.jobId          = row.jobId
+        la.id_rc       = coalesce(row.id_rc, randomUUID()),
     ';
 
             lv_file := '
@@ -3663,6 +3717,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
 
     MERGE (la:LegacyApplication {name: row.name})
     SET la.legacyAppId    = row.legacyAppId,
+        la.id_rc       = coalesce(row.id_rc, randomUUID()),
         la.appName        = row.appName,
         la.appCode        = row.appCode,
         la.status         = row.status,
@@ -3794,6 +3849,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
 
     MERGE (mc:MigrationCase {name: row.name})
     SET mc.migrationCaseId = row.migrationCaseId,
+        mc.id_rc       = coalesce(row.id_rc, randomUUID()),
         mc.legacyAppId     = row.legacyAppId,
         mc.caseCode        = row.caseCode,
         mc.caseName        = row.caseName,
@@ -3832,6 +3888,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
 
     MERGE (mc:MigrationCase {name: row.name})
     SET mc.migrationCaseId = row.migrationCaseId,
+        mc.id_rc       = coalesce(row.id_rc, randomUUID()),
         mc.legacyAppId     = row.legacyAppId,
         mc.caseCode        = row.caseCode,
         mc.caseName        = row.caseName,
@@ -3968,6 +4025,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
 
                 MERGE (of:OraForm {name: row.name})
                 SET of.oraFormId        = row.oraFormId,
+                    of.id_rc       = coalesce(row.id_rc, randomUUID()),
                     of.legacyAppId      = row.legacyAppId,
                     of.migrationCaseId  = row.migrationCaseId,
                     of.caseFormId       = row.caseFormId,
@@ -4006,6 +4064,7 @@ CREATE OR REPLACE PACKAGE BODY neo4jUtils as
 
                 MERGE (of:OraForm {name: row.name})
                 SET of.oraFormId        = row.oraFormId,
+                    of.id_rc       = coalesce(row.id_rc, randomUUID()),
                     of.legacyAppId      = row.legacyAppId,
                     of.formCode         = row.formCode,
                     of.formName         = row.formName,
@@ -4441,20 +4500,22 @@ dbms_output.put_line('export_ora_pkg_prc_calls '||sql%rowcount);
 
                 // Source package node (paket ki klièe)
                 MERGE (srcPkg:OraclePackage {name: row.sourceFullName})
-                SET srcPkg.dbName      = row.dbName,
+                SET srcPkg.id_rc       = coalesce(row.id_rc, randomUUID()),
+                    srcPkg.dbName      = row.dbName,
                     srcPkg.owner       = row.sourceOwner,
                     srcPkg.packageName = row.sourcePackage,
-                    srcPkg.fullName    = row.sourceFullName,
+                    srcPkg.name    = row.sourceFullName,
                     srcPkg.projectName = row.projectName,
                     srcPkg.jobId       = row.jobId
 
                 // Source procedure node (procedura ki klièe)
                 MERGE (srcPrc:OracleProcedure {name: row.sourceFullName + "." + row.sourceProcedure})
-                SET srcPrc.dbName       = row.dbName,
+                SET srcPrc.id_rc       = coalesce(row.id_rc, randomUUID()),
+                    srcPrc.dbName       = row.dbName,
                     srcPrc.owner        = row.sourceOwner,
                     srcPrc.packageName  = row.sourcePackage,
                     srcPrc.procedureName= row.sourceProcedure,
-                    srcPrc.fullName     = row.sourceFullName + "." + row.sourceProcedure,
+                    srcPrc.name     = row.sourceFullName + "." + row.sourceProcedure,
                     srcPrc.projectName  = row.projectName,
                     srcPrc.jobId        = row.jobId
 
@@ -4465,20 +4526,22 @@ dbms_output.put_line('export_ora_pkg_prc_calls '||sql%rowcount);
 
                 // Called package node (klicani paket)
                 MERGE (calledPkg:OraclePackage {name: row.packageFullName})
-                SET calledPkg.dbName      = row.dbName,
+                SET calledPkg.id_rc       = coalesce(row.id_rc, randomUUID()),
+                    calledPkg.dbName      = row.dbName,
                     calledPkg.owner       = row.calledOwner,
                     calledPkg.packageName = row.calledPackage,
-                    calledPkg.fullName    = row.packageFullName,
+                    calledPkg.name    = row.packageFullName,
                     calledPkg.projectName = row.projectName,
                     calledPkg.jobId       = row.jobId
 
                 // Called procedure node (klicana procedura)
                 MERGE (calledPrc:OracleProcedure {name: row.procedureFullName})
-                SET calledPrc.dbName        = row.dbName,
+                SET calledPrc.id_rc       = coalesce(row.id_rc, randomUUID()),
+                    calledPrc.dbName        = row.dbName,
                     calledPrc.owner         = row.calledOwner,
                     calledPrc.packageName   = row.calledPackage,
                     calledPrc.procedureName = row.calledProcedure,
-                    calledPrc.fullName      = row.procedureFullName,
+                    calledPrc.name      = row.procedureFullName,
                     calledPrc.projectName   = row.projectName,
                     calledPrc.jobId         = row.jobId
 
@@ -4505,20 +4568,22 @@ dbms_output.put_line('export_ora_pkg_prc_calls '||sql%rowcount);
 
                 // Source package node (paket ki klièe)
                 MERGE (srcPkg:OraclePackage {name: row.sourceFullName})
-                SET srcPkg.dbName      = row.dbName,
+                SET scrPkg.id_rc       = coalesce(row.id_rc, randomUUID()),
+                    srcPkg.dbName      = row.dbName,
                     srcPkg.owner       = row.sourceOwner,
                     srcPkg.packageName = row.sourcePackage,
-                    srcPkg.fullName    = row.sourceFullName,
+                    srcPkg.name    = row.sourceFullName,
                     srcPkg.projectName = row.projectName,
                     srcPkg.jobId       = row.jobId
 
                 // Source procedure node (procedura ki klièe)
                 MERGE (srcPrc:OracleProcedure {name: row.sourceFullName + "." + row.sourceProcedure})
-                SET srcPrc.dbName        = row.dbName,
+                SET srcPrc.id_rc       = coalesce(row.id_rc, randomUUID()),
+                    srcPrc.dbName        = row.dbName,
                     srcPrc.owner         = row.sourceOwner,
                     srcPrc.packageName   = row.sourcePackage,
                     srcPrc.procedureName = row.sourceProcedure,
-                    srcPrc.fullName      = row.sourceFullName + "." + row.sourceProcedure,
+                    srcPrc.name      = row.sourceFullName + "." + row.sourceProcedure,
                     srcPrc.projectName   = row.projectName,
                     srcPrc.jobId         = row.jobId
 
@@ -4529,20 +4594,22 @@ dbms_output.put_line('export_ora_pkg_prc_calls '||sql%rowcount);
 
                 // Called package node (klicani paket)
                 MERGE (calledPkg:OraclePackage {name: row.packageFullName})
-                SET calledPkg.dbName      = row.dbName,
+                SET calledPkg.id_rc       = coalesce(row.id_rc, randomUUID()),
+                    calledPkg.dbName      = row.dbName,
                     calledPkg.owner       = row.calledOwner,
                     calledPkg.packageName = row.calledPackage,
-                    calledPkg.fullName    = row.packageFullName,
+                    calledPkg.name    = row.packageFullName,
                     calledPkg.projectName = row.projectName,
                     calledPkg.jobId       = row.jobId
 
                 // Called procedure node (klicana procedura)
                 MERGE (calledPrc:OracleProcedure {name: row.procedureFullName})
-                SET calledPrc.dbName        = row.dbName,
+                SET calledPrc.id_rc       = coalesce(row.id_rc, randomUUID()),
+                    calledPrc.dbName        = row.dbName,
                     calledPrc.owner         = row.calledOwner,
                     calledPrc.packageName   = row.calledPackage,
                     calledPrc.procedureName = row.calledProcedure,
-                    calledPrc.fullName      = row.procedureFullName,
+                    calledPrc.name      = row.procedureFullName,
                     calledPrc.projectName   = row.projectName,
                     calledPrc.jobId         = row.jobId
 
@@ -4654,6 +4721,1025 @@ WHERE MC_PAGE.MIGRATION_CASE_ID=
         return l_PN_JOBID;                                                                                                                                                                                                                                                                                                                                        
     END;
     
+    
+function build_procedure_chunk_text(
+    pn_jobid           in number,
+    pv_package_owner   in varchar2,
+    pv_package_name    in varchar2,
+    pv_procedure_name  in varchar2
+) return clob
+as
+    l_text           clob;
+    l_tables_seen    varchar2(32767) := '|';
+    l_line_no        number := 0;
+    l_has_rows       boolean := false;
+
+    procedure add_line(p_txt in varchar2) is
+    begin
+        if l_text is null then
+            dbms_lob.createtemporary(l_text, true);
+        end if;
+        dbms_lob.writeappend(l_text, length(p_txt || chr(10)), p_txt || chr(10));
+    end;
+    begin
+        for r in (
+            select
+                pr.table_owner,
+                pr.table_name,
+                pr.source_text,
+                pr.source_line,
+                pr.ref_type,
+                pr.project_name,
+                pr.procedure_name,
+                pr.procedure_full_name,
+                pr.proc_start_line,
+                pr.proc_end_line,
+                pr.package_owner,
+                pr.package_name,
+                pr.package_full_name,
+                pr.object_full_name,
+                pr.last_updated_on,
+                pr.last_updated_by,
+                pr.jobid,
+                pr.dml_type,
+                pr.dbname
+            from neoj_ora_package_procedure_crud pr
+            where pr.jobid = pn_jobid
+              and upper(pr.package_owner) = upper(pv_package_owner)
+              and upper(pr.package_name) = upper(pv_package_name)
+              and upper(pr.procedure_name) = upper(pv_procedure_name)
+              and pr.dml_type in ('INSERT','UPDATE','DELETE','SELECT')
+            order by pr.source_line
+        )
+        loop
+            if not l_has_rows then
+                l_has_rows := true;
+
+                add_line('Object type: Oracle Procedure');
+                add_line('Database: ' || r.dbname);
+                add_line('Package owner: ' || r.package_owner);
+                add_line('Package: ' || r.package_name);
+                add_line('Procedure: ' || r.procedure_name);
+                add_line('Procedure full name: ' || r.procedure_full_name);
+                add_line('Line range: ' || r.proc_start_line || '-' || r.proc_end_line);
+                add_line('');
+                add_line('Main database actions:');
+            end if;
+
+            add_line(
+                '- ' || r.dml_type || ' on ' ||
+                r.table_owner || '.' || r.table_name ||
+                ' (line ' || r.source_line || ')'
+            );
+
+            if instr(l_tables_seen, '|' || r.table_owner || '.' || r.table_name || '|') = 0 then
+                l_tables_seen := l_tables_seen || r.table_owner || '.' || r.table_name || '|';
+            end if;
+        end loop;
+
+        if not l_has_rows then
+            return null;
+        end if;
+
+        add_line('');
+        add_line('Related tables:');
+
+        for t in (
+            select distinct
+                pr.table_owner,
+                pr.table_name
+            from neoj_ora_package_procedure_crud pr
+            where pr.jobid = pn_jobid
+              and upper(pr.package_owner) = upper(pv_package_owner)
+              and upper(pr.package_name) = upper(pv_package_name)
+              and upper(pr.procedure_name) = upper(pv_procedure_name)
+              and pr.dml_type in ('INSERT','UPDATE','DELETE','SELECT')
+            order by pr.table_owner, pr.table_name
+        )
+        loop
+            add_line('- ' || t.table_owner || '.' || t.table_name);
+        end loop;
+
+        add_line('');
+        add_line('Relevant source snippets:');
+
+        for s in (
+            select distinct
+                pr.source_line,
+                trim(replace(pr.source_text, chr(10), ' ')) as source_text
+            from neoj_ora_package_procedure_crud pr
+            where pr.jobid = pn_jobid
+              and upper(pr.package_owner) = upper(pv_package_owner)
+              and upper(pr.package_name) = upper(pv_package_name)
+              and upper(pr.procedure_name) = upper(pv_procedure_name)
+              and pr.dml_type in ('INSERT','UPDATE','DELETE','SELECT')
+              and pr.source_text is not null
+            order by pr.source_line
+        )
+        loop
+            l_line_no := l_line_no + 1;
+            exit when l_line_no > 20;
+
+            add_line('[' || s.source_line || '] ' || substr(s.source_text, 1, 300));
+        end loop;
+
+        return l_text;
+    end build_procedure_chunk_text;
+    
+    
+    procedure export_ora_pkg_prc_chunks(
+        pn_JOBID        in number,
+        pvOutputSource  in varchar2,
+        pvOutputType    in varchar2,
+        pvApexUrl       in varchar2,
+        pv_project_name in varchar2,
+        pvOutCypher     out clob,
+        pvOutFile       out clob,
+        pn_id           out number
+    )
+    as
+        l_clob        clob;
+        l_chunk_text  clob;
+        l_jobid_exp   number:=neoj_apex_structure_seq.nextval;
+        l_jobid_exp_1 number:=neoj_apex_structure_seq.nextval;
+        lv_cypher     clob;
+        lv_file       clob;
+    begin
+        apex_json.initialize_clob_output;
+        apex_json.open_object;
+        apex_json.open_array('data');
+
+        for rec in (
+            select distinct
+                nvl(pr.project_name, pv_project_name) as project_name,
+                pr.dbname,
+                pr.package_owner,
+                pr.package_name,
+                pr.package_full_name,
+                pr.procedure_name,
+                pr.procedure_full_name,
+                pr.proc_start_line,
+                pr.proc_end_line,
+                pr.jobid
+            from neoj_ora_package_procedure_crud pr
+            where pr.jobid = pn_JOBID
+              and pr.package_owner is not null
+              and pr.package_name is not null
+              and pr.procedure_name is not null
+              and pr.dml_type in ('INSERT','UPDATE','DELETE','SELECT')
+            order by pr.package_owner, pr.package_name, pr.procedure_name
+        )
+        loop
+            l_chunk_text := build_procedure_chunk_text(
+                pn_jobid          => rec.jobid,
+                pv_package_owner  => rec.package_owner,
+                pv_package_name   => rec.package_name,
+                pv_procedure_name => rec.procedure_name
+            );
+
+            if l_chunk_text is not null then
+                apex_json.open_object;
+                apex_json.write('jobId',             rec.jobid);
+                apex_json.write('projectName',       rec.project_name);
+                apex_json.write('dbName',            rec.dbname);
+                apex_json.write('packageOwner',      rec.package_owner);
+                apex_json.write('packageName',       rec.package_name);
+                apex_json.write('packageFullName',   rec.package_full_name);
+                apex_json.write('procedureName',     rec.procedure_name);
+                apex_json.write('procedureFullName', rec.procedure_full_name);
+                apex_json.write('startLine',         rec.proc_start_line);
+                apex_json.write('endLine',           rec.proc_end_line);
+
+                apex_json.write('key',
+                    rec.project_name || '|' || rec.procedure_full_name || '|0001'
+                );
+                apex_json.write('name', rec.procedure_name || ' | CRUD summary');
+                apex_json.write('title', rec.procedure_name || ' | CRUD summary');
+                apex_json.write('chunkType', 'CODE');
+                apex_json.write('sourceType', 'PLSQL_PROCEDURE');
+                apex_json.write('sourceName', rec.procedure_name);
+                apex_json.write('sourceKey', rec.procedure_full_name);
+                apex_json.write('chunkIndex', 1);
+                apex_json.write('text', l_chunk_text);
+
+                apex_json.close_object;
+            end if;
+        end loop;
+
+        apex_json.close_array;
+        apex_json.close_object;
+
+        l_clob := apex_json.get_clob_output;
+        apex_json.free_output;
+
+        
+        
+        if upper(pvOutputType) = 'FILE' then
+            lv_cypher := '
+                CALL apoc.load.json("export_ora_pkg_prc_chunks_<<pn_JOBID>>.json") YIELD value
+                UNWIND value.data AS row
+
+                MERGE (p:OracleProcedure {name: row.procedureFullName})
+                SET p.dbName        = row.dbName,
+                    p.owner         = row.packageOwner,
+                    p.packageName   = row.packageName,
+                    p.procedureName = row.procedureName,
+                    p.fullName      = row.procedureFullName,
+                    p.projectName   = row.projectName,
+                    p.jobId         = row.jobId
+
+                MERGE (c:Chunk {key: row.key})
+                SET c.id_rc          = coalesce(row.id_rc, randomUUID()),                
+                    c.name           = row.name,
+                    c.title          = row.title,
+                    c.projectName    = row.projectName,
+                    c.chunkType      = row.chunkType,
+                    c.sourceType     = row.sourceType,
+                    c.sourceName     = row.sourceName,
+                    c.sourceKey      = row.sourceKey,
+                    c.chunkIndex     = row.chunkIndex,
+                    c.startLine      = row.startLine,
+                    c.endLine        = row.endLine,
+                    c.text           = row.text
+
+                MERGE (p)-[:HAS_CHUNK]->(c)
+                ';
+                
+            lv_cypher := replace(lv_cypher, '<<pn_JOBID>>', to_char(l_jobid_exp_1));                
+
+            pvOutCypher := lv_cypher;
+
+            lv_file := 'Invoke-WebRequest "<<pvApexUrl>><<pn_JOBID>>" `
+                              -UseDefaultCredentials `
+                              -OutFile "export_ora_pkg_prc_chunks_<<pn_JOBID>>.json"
+                            ';
+                
+            lv_file := replace(lv_file, '<<pvApexUrl>>', pvApexUrl);
+            lv_file := replace(lv_file, '<<pn_JOBID>>', to_char(l_jobid_exp_1));                
+            pvOutFile := lv_file;
+
+        else
+        
+         lv_cypher := '
+            WITH "<<pvApexUrl>><<pn_JOBID>>" AS url
+            CALL apoc.load.json(url) YIELD value
+                UNWIND value.data AS row
+
+                MERGE (p:OracleProcedure {name: row.procedureFullName})
+                SET p.dbName        = row.dbName,
+                    p.owner         = row.packageOwner,
+                    p.packageName   = row.packageName,
+                    p.procedureName = row.procedureName,
+                    p.fullName      = row.procedureFullName,
+                    p.projectName   = row.projectName,
+                    p.jobId         = row.jobId
+
+                MERGE (c:Chunk {key: row.key})
+                SET c.id_rc          = coalesce(row.id_rc, randomUUID()),
+                    c.name           = row.name,
+                    c.title          = row.title,
+                    c.projectName    = row.projectName,
+                    c.chunkType      = row.chunkType,
+                    c.sourceType     = row.sourceType,
+                    c.sourceName     = row.sourceName,
+                    c.sourceKey      = row.sourceKey,
+                    c.chunkIndex     = row.chunkIndex,
+                    c.startLine      = row.startLine,
+                    c.endLine        = row.endLine,
+                    c.text           = row.text
+
+                MERGE (p)-[:HAS_CHUNK]->(c)'            
+            ;        
+            
+            lv_cypher := replace(lv_cypher, '<<pvApexUrl>>', pvApexUrl);
+            lv_cypher := replace(lv_cypher, '<<pn_JOBID>>', to_char(l_jobid_exp_1));            
+            lv_file := null;
+
+        end if;        
+
+        save_apex_export(
+            pn_jobid         => l_jobid_exp_1,
+            pn_master_job_id => l_jobid_exp,
+            pv_export_type   => 'ORA_PKG_PRC_CHUNKS',
+            pc_payload       => l_clob,
+            pc_cypher        => lv_cypher,
+            pn_jobid_orig    => pn_JOBID,
+            pn_id            => pn_id
+        );
+
+        update_apex_export_cypher(pn_id, pvOutCypher, pvOutFile);   
+
+    exception
+        when others then
+            raise;
+    end export_ora_pkg_prc_chunks;     
+    
+    
+    
+    function build_apex_region_chunk_text(
+        pn_jobid          in number,
+        pn_application_id in number,
+        pn_page_id        in number,
+        pn_region_id      in number,        
+        pv_workspace    in varchar2 default null,
+        pv_project_name in varchar2 default 'DemoNeo4j'        
+    ) return clob        
+    as
+    l_text      clob;
+    l_has_rows  boolean := false;
+
+    procedure add_line(p_txt in varchar2) is
+    begin
+        if l_text is null then
+            dbms_lob.createtemporary(l_text, true);
+        end if;
+
+        dbms_lob.writeappend(l_text, length(p_txt || chr(10)), p_txt || chr(10));
+    end;
+    begin
+                for h in (
+                        select
+                                max(s.dbname) as dbname,
+                                max(nvl(s.project_name, pv_project_name)) as project_name,
+                                s.application_id,
+                                s.page_id,
+                                to_char(s.region_id) as region_id,
+                                max(s.application_name) as application_name,
+                                max(s.page_name) as page_name,
+                                max(s.region_name) as region_name,
+                            max(s.source_type) as source_type
+                        from neoj_apex_structure s
+                        where s.jobid = pn_jobid
+                            and s.application_id = pn_application_id
+                            and (pn_page_id is null or s.page_id = pn_page_id)
+                            and (pn_region_id is null or to_char(s.region_id) = to_char(pn_region_id))
+                        group by
+                                s.application_id,
+                                s.page_id,
+                                to_char(s.region_id)
+                )
+        loop
+            l_has_rows := true;
+            add_line('Object type: APEX Region');
+            add_line('Database: ' || h.dbname);
+            add_line('Project: ' || h.project_name);
+            add_line('Application ID: ' || h.application_id);
+            add_line('Page ID: ' || h.page_id);
+            add_line('Region ID: ' || h.region_id);
+
+            if h.application_name is not null then
+                add_line('Application: ' || h.application_name);
+            end if;
+
+            if h.page_name is not null then
+                add_line('Page: ' || h.page_name);
+            end if;
+
+            if h.region_name is not null then
+                add_line('Region: ' || h.region_name);
+            end if;
+
+            if h.source_type is not null then
+                add_line('Region source type: ' || h.source_type);
+            end if;
+
+            add_line('');
+            add_line('Main database actions:');
+        end loop;
+
+        for r in (
+            select
+                s.dbname as database_name,
+                s.table_owner,
+                s.table_name,
+                s.table_type,
+                s.is_editable,
+                s.edit_operations,
+                s.application_id,
+                s.page_id,
+                to_char(s.region_id) as region_id,
+                nvl(s.project_name, pv_project_name) as project_name
+            from neoj_apex_structure_tables s
+            where s.jobid = pn_jobid
+              and s.application_id = pn_application_id
+              and s.page_id = pn_page_id
+                            and (pn_region_id is null or to_char(s.region_id) = to_char(pn_region_id))
+            order by s.application_id, s.page_id, s.region_id, s.table_owner, s.table_name
+        )
+        loop
+            if not l_has_rows then
+                l_has_rows := true;
+                add_line('Object type: APEX Region');
+                add_line('Database: ' || r.database_name);
+                add_line('Project: ' || r.project_name);
+                add_line('Application ID: ' || r.application_id);
+                add_line('Page ID: ' || r.page_id);
+                add_line('Region ID: ' || r.region_id);
+                add_line('');
+                add_line('Main database actions:');
+            end if;
+
+            add_line('- SELECTS FROM ' || r.table_owner || '.' || r.table_name);
+
+            if instr(lower(nvl(r.edit_operations, '')), 'i') > 0 then
+                add_line('- INSERTS INTO ' || r.table_owner || '.' || r.table_name);
+            end if;
+
+            if instr(lower(nvl(r.edit_operations, '')), 'u') > 0 then
+                add_line('- UPDATES ' || r.table_owner || '.' || r.table_name);
+            end if;
+
+            if instr(lower(nvl(r.edit_operations, '')), 'd') > 0 then
+                add_line('- DELETES FROM ' || r.table_owner || '.' || r.table_name);
+            end if;
+        end loop;
+
+        if not l_has_rows then
+            return null;
+        end if;
+
+        add_line('');
+        add_line('Related tables:');
+
+        for t in (
+            select distinct
+                s.table_owner,
+                s.table_name
+            from neoj_apex_structure_tables s
+            where s.jobid = pn_jobid
+              and s.application_id = pn_application_id
+              and s.page_id = pn_page_id
+                            and (pn_region_id is null or to_char(s.region_id) = to_char(pn_region_id))
+              and s.table_owner is not null
+              and s.table_name is not null
+            order by s.table_owner, s.table_name
+        )
+        loop
+            add_line('- ' || t.table_owner || '.' || t.table_name);
+        end loop;
+
+        add_line('');
+        add_line('Relevant source snippets:');
+
+        for src in (
+            select distinct
+                trim(
+                    replace(
+                        replace(dbms_lob.substr(s.region_source, 300, 1), chr(13), ' '),
+                        chr(10),
+                        ' '
+                    )
+                ) as region_source
+            from neoj_apex_structure s
+            where s.jobid = pn_jobid
+              and s.application_id = pn_application_id
+              and s.page_id = pn_page_id
+                            and (pn_region_id is null or to_char(s.region_id) = to_char(pn_region_id))
+              and s.region_source is not null
+        )
+        loop
+            add_line('[region source] ' || src.region_source);
+        end loop;
+
+        for d in (
+            select
+                s.table_owner,
+                s.table_name,
+                s.edit_operations
+            from neoj_apex_structure_tables s
+            where s.jobid = pn_jobid
+              and s.application_id = pn_application_id
+              and s.page_id = pn_page_id
+                            and (pn_region_id is null or to_char(s.region_id) = to_char(pn_region_id))
+            order by s.table_owner, s.table_name
+        )
+        loop
+            add_line('[derived] SELECTS FROM ' || d.table_owner || '.' || d.table_name);
+
+            if instr(lower(nvl(d.edit_operations, '')), 'i') > 0 then
+                add_line('[derived] INSERTS INTO ' || d.table_owner || '.' || d.table_name);
+            end if;
+
+            if instr(lower(nvl(d.edit_operations, '')), 'u') > 0 then
+                add_line('[derived] UPDATES ' || d.table_owner || '.' || d.table_name);
+            end if;
+
+            if instr(lower(nvl(d.edit_operations, '')), 'd') > 0 then
+                add_line('[derived] DELETES FROM ' || d.table_owner || '.' || d.table_name);
+            end if;
+        end loop;
+
+        return l_text;
+    end build_apex_region_chunk_text;
+
+
+    procedure export_apex_region_chunks(
+        pn_master_job_id in number,
+        pn_JOBID         in number,
+        pvOutputSource   in varchar2,
+        pvOutputType     in varchar2,
+        pvApexUrl        in varchar2,
+        pv_project_name  in varchar2,
+        pvOutCypher      out clob,
+        pvOutFile        out clob,
+        pn_id            out number
+    )
+    as
+        l_clob        clob;
+        l_chunk_text  clob;
+        l_jobid_exp   number := neoj_apex_structure_seq.nextval;
+        l_jobid_exp_1 number := neoj_apex_structure_seq.nextval;
+        lv_cypher     clob;
+        lv_file       clob;
+    begin
+        apex_json.initialize_clob_output;
+        apex_json.open_object;
+        apex_json.open_array('data');
+
+        for rec in (
+            select distinct
+                s.jobid,
+                nvl(s.project_name, pv_project_name) as project_name,
+                s.dbname,
+                s.application_id,
+                s.page_id,
+                s.region_id,
+                s.region_name,
+                s.source_type
+            from neoj_apex_structure s
+            where s.jobid = pn_JOBID
+            order by s.application_id, s.page_id, s.region_id
+        )
+        loop
+            l_chunk_text := build_apex_region_chunk_text(
+                pn_jobid          => rec.jobid,
+                pn_application_id => rec.application_id,
+                pn_page_id        => rec.page_id,
+                pn_region_id      => rec.region_id
+            );
+
+            if l_chunk_text is not null then
+                apex_json.open_object;
+                apex_json.write('jobId',         rec.jobid);
+                apex_json.write('projectName',   rec.project_name);
+                apex_json.write('dbName',        rec.dbname);
+                apex_json.write('applicationId', rec.application_id);
+                apex_json.write('pageId',        rec.page_id);
+                apex_json.write('regionId',      rec.region_id);
+                apex_json.write('regionName',    rec.region_name);
+                apex_json.write('regionSourceType', rec.source_type);
+
+                apex_json.write(
+                    'key',
+                    rec.project_name || '|' ||
+                    rec.dbname || '|' ||
+                    rec.application_id || '|' ||
+                    rec.page_id || '|' ||
+                    rec.region_id || '|0001'
+                );
+                apex_json.write('name', rec.region_name || ' | CRUD summary');
+                apex_json.write('title', rec.region_name || ' | CRUD summary');
+                apex_json.write('chunkType', 'CODE');
+                apex_json.write('sourceType', 'APEX_REGION');
+                apex_json.write('sourceName', rec.region_name);
+                apex_json.write(
+                    'sourceKey',
+                    rec.dbname || '|' || rec.application_id || '|' || rec.page_id || '|' || rec.region_id
+                );
+                apex_json.write('chunkIndex', 1);
+                apex_json.write('text', l_chunk_text);
+
+                apex_json.close_object;
+            end if;
+        end loop;
+
+        apex_json.close_array;
+        apex_json.close_object;
+
+        l_clob := apex_json.get_clob_output;
+        apex_json.free_output;
+
+        if upper(pvOutputType) = 'FILE' then
+            lv_cypher := '
+                CALL apoc.load.json("export_apex_region_chunks_<<pn_JOBID>>.json") YIELD value
+                UNWIND value.data AS row
+
+                MERGE (r:APEXRegion {regionId: row.regionId})
+                SET r.dbName      = row.dbName,
+                    r.projectName = row.projectName,
+                    r.sourceType  = row.regionSourceType,
+                    r.jobId       = row.jobId
+
+                MERGE (c:Chunk {key: row.key})
+                SET c.id_rc       = coalesce(row.id_rc, randomUUID()),
+                    c.name        = row.name,
+                    c.title       = row.title,
+                    c.projectName = row.projectName,
+                    c.chunkType   = row.chunkType,
+                    c.sourceType  = row.sourceType,
+                    c.sourceName  = row.sourceName,
+                    c.sourceKey   = row.sourceKey,
+                    c.chunkIndex  = row.chunkIndex,
+                    c.text        = row.text
+
+                MERGE (r)-[:HAS_CHUNK]->(c)
+            ';
+
+            lv_cypher := replace(lv_cypher, '<<pn_JOBID>>', to_char(l_jobid_exp_1));
+            pvOutCypher := lv_cypher;
+
+            lv_file := 'Invoke-WebRequest "<<pvApexUrl>><<pn_JOBID>>" `
+                          -UseDefaultCredentials `
+                          -OutFile "export_apex_region_chunks_<<pn_JOBID>>.json"
+                        ';
+
+            lv_file := replace(lv_file, '<<pvApexUrl>>', pvApexUrl);
+            lv_file := replace(lv_file, '<<pn_JOBID>>', to_char(l_jobid_exp_1));
+            pvOutFile := lv_file;
+        else
+            lv_cypher := '
+                WITH "<<pvApexUrl>><<pn_JOBID>>" AS url
+                CALL apoc.load.json(url) YIELD value
+                UNWIND value.data AS row
+
+                MERGE (r:APEXRegion {regionId: row.regionId})
+                SET r.dbName      = row.dbName,
+                    r.projectName = row.projectName,
+                    r.sourceType  = row.regionSourceType,
+                    r.jobId       = row.jobId
+
+                MERGE (c:Chunk {key: row.key})
+                SET c.id_rc       = coalesce(row.id_rc, randomUUID()),
+                    c.name        = row.name,
+                    c.title       = row.title,
+                    c.projectName = row.projectName,
+                    c.chunkType   = row.chunkType,
+                    c.sourceType  = row.sourceType,
+                    c.sourceName  = row.sourceName,
+                    c.sourceKey   = row.sourceKey,
+                    c.chunkIndex  = row.chunkIndex,
+                    c.text        = row.text
+
+                MERGE (r)-[:HAS_CHUNK]->(c)
+            ';
+
+            lv_cypher := replace(lv_cypher, '<<pvApexUrl>>', pvApexUrl);
+            lv_cypher := replace(lv_cypher, '<<pn_JOBID>>', to_char(l_jobid_exp_1));
+            lv_file := null;
+        end if;
+
+        save_apex_export(
+            pn_jobid         => l_jobid_exp_1,
+            pn_master_job_id => pn_master_job_id,
+            pv_export_type   => 'APEX_REGION_CHUNKS',
+            pc_payload       => l_clob,
+            pc_cypher        => lv_cypher,
+            pn_jobid_orig    => pn_JOBID,
+            pn_id            => pn_id
+        );
+
+        update_apex_export_cypher(pn_id, pvOutCypher, pvOutFile);
+
+    exception
+        when others then
+            raise;
+    end export_apex_region_chunks;       
+    
+    
+    function build_procedure_call_chunk_text(
+        pn_jobid           in number,
+        pv_package_owner   in varchar2,
+        pv_package_name    in varchar2,
+        pv_procedure_name  in varchar2
+    ) return clob
+    as
+        l_text        clob;
+        l_has_rows    boolean := false;
+        l_dbname      varchar2(128);
+        l_project     varchar2(256);
+
+        procedure add_line(p_txt in varchar2) is
+        begin
+            if l_text is null then
+                dbms_lob.createtemporary(l_text, true);
+            end if;
+
+            dbms_lob.writeappend(l_text, length(p_txt || chr(10)), p_txt || chr(10));
+        end;
+        begin
+            select max(p.dbname),
+                   max(p.project_name)
+            into   l_dbname,
+                   l_project
+            from neoj_ora_package_procedure p
+            where p.jobid = pn_jobid
+              and (
+                    (
+                        upper(p.source_owner) = upper(pv_package_owner)
+                        and upper(p.source_package) = upper(pv_package_name)
+                        and upper(p.source_procedure) = upper(pv_procedure_name)
+                    )
+                    or
+                    (
+                        upper(p.owner) = upper(pv_package_owner)
+                        and upper(p.object_name) = upper(pv_package_name)
+                        and upper(p.procedure_name) = upper(pv_procedure_name)
+                    )
+                  );
+
+            for r in (
+                select 1
+                from neoj_ora_package_procedure p
+                where p.jobid = pn_jobid
+                  and (
+                        (
+                            upper(p.source_owner) = upper(pv_package_owner)
+                            and upper(p.source_package) = upper(pv_package_name)
+                            and upper(p.source_procedure) = upper(pv_procedure_name)
+                        )
+                        or
+                        (
+                            upper(p.owner) = upper(pv_package_owner)
+                            and upper(p.object_name) = upper(pv_package_name)
+                            and upper(p.procedure_name) = upper(pv_procedure_name)
+                        )
+                      )
+                  and rownum = 1
+            ) loop
+                l_has_rows := true;
+            end loop;
+
+            if not l_has_rows then
+                return null;
+            end if;
+
+            add_line('Object type: Oracle Procedure');
+            add_line('Database: ' || l_dbname);
+            add_line('Package owner: ' || pv_package_owner);
+            add_line('Package: ' || pv_package_name);
+            add_line('Procedure: ' || pv_procedure_name);
+            add_line('Procedure full name: ' ||
+                     l_dbname || '.' || pv_package_owner || '.' || pv_package_name || '.' || pv_procedure_name);
+
+            if l_project is not null then
+                add_line('Project: ' || l_project);
+            end if;
+
+            add_line('');
+            add_line('Outgoing calls:');
+
+            for c in (
+                select distinct
+                       p.source_line,
+                       p.owner          as called_owner,
+                       p.object_name    as called_package,
+                       p.procedure_name as called_procedure
+                from neoj_ora_package_procedure p
+                where p.jobid = pn_jobid
+                  and upper(p.source_owner) = upper(pv_package_owner)
+                  and upper(p.source_package) = upper(pv_package_name)
+                  and upper(p.source_procedure) = upper(pv_procedure_name)
+                order by p.source_line, p.owner, p.object_name, p.procedure_name
+            ) loop
+                add_line(
+                    '- line ' || c.source_line || ': ' ||
+                    c.called_owner || '.' || c.called_package || '.' || c.called_procedure
+                );
+            end loop;
+
+            add_line('');
+            add_line('Incoming callers:');
+
+            for c in (
+                select
+                    p.source_owner,
+                    p.source_package,
+                    p.source_procedure,
+                    min(p.source_line) as first_call_line
+                from neoj_ora_package_procedure p
+                where p.jobid = pn_jobid
+                  and upper(p.owner) = upper(pv_package_owner)
+                  and upper(p.object_name) = upper(pv_package_name)
+                  and upper(p.procedure_name) = upper(pv_procedure_name)
+                group by
+                    p.source_owner,
+                    p.source_package,
+                    p.source_procedure
+                order by
+                    p.source_owner,
+                    p.source_package,
+                    p.source_procedure
+            ) loop
+                add_line(
+                    '- ' || c.source_owner || '.' || c.source_package || '.' || c.source_procedure ||
+                    ' (first call at line ' || c.first_call_line || ')'
+                );
+            end loop;
+
+            return l_text;
+        end build_procedure_call_chunk_text;
+        
+        
+procedure export_ora_pkg_prc_call_chunks(
+    pn_JOBID        in number,
+    pvOutputSource  in varchar2,
+    pvOutputType    in varchar2,
+    pvApexUrl       in varchar2,
+    pv_project_name in varchar2,
+    pvOutCypher     out clob,
+    pvOutFile       out clob,
+    pn_id           out number
+)
+as
+    l_clob       clob;
+    l_chunk_text clob;
+    l_jobid_exp  number := neoj_apex_structure_seq.nextval;
+    lv_cypher    clob;
+    lv_file      clob;
+begin
+    apex_json.initialize_clob_output;
+    apex_json.open_object;
+    apex_json.open_array('data');
+
+    for rec in (
+        select distinct
+               nvl(x.project_name, pv_project_name) as project_name,
+               x.dbname,
+               x.package_owner,
+               x.package_name,
+               x.procedure_name,
+               x.procedure_full_name,
+               x.jobid
+        from (
+            select
+                p.jobid,
+                p.project_name,
+                p.dbname,
+                p.source_owner as package_owner,
+                p.source_package as package_name,
+                p.source_procedure as procedure_name,
+                p.dbname || '.' || p.source_owner || '.' || p.source_package || '.' || p.source_procedure
+                    as procedure_full_name
+            from neoj_ora_package_procedure p
+            where p.jobid = pn_JOBID
+              and p.source_owner is not null
+              and p.source_package is not null
+              and p.source_procedure is not null
+
+            union
+
+            select
+                p.jobid,
+                p.project_name,
+                p.dbname,
+                p.owner as package_owner,
+                p.object_name as package_name,
+                p.procedure_name as procedure_name,
+                p.procedure_full_name
+            from neoj_ora_package_procedure p
+            where p.jobid = pn_JOBID
+              and p.owner is not null
+              and p.object_name is not null
+              and p.procedure_name is not null
+        ) x
+        order by x.package_owner, x.package_name, x.procedure_name
+    ) loop
+        l_chunk_text := build_procedure_call_chunk_text(
+            pn_jobid          => rec.jobid,
+            pv_package_owner  => rec.package_owner,
+            pv_package_name   => rec.package_name,
+            pv_procedure_name => rec.procedure_name
+        );
+
+        if l_chunk_text is not null then
+            apex_json.open_object;
+            apex_json.write('jobId',             rec.jobid);
+            apex_json.write('projectName',       rec.project_name);
+            apex_json.write('dbName',            rec.dbname);
+            apex_json.write('packageOwner',      rec.package_owner);
+            apex_json.write('packageName',       rec.package_name);
+            apex_json.write('procedureName',     rec.procedure_name);
+            apex_json.write('procedureFullName', rec.procedure_full_name);
+            apex_json.write('key',
+                rec.project_name || '|' || rec.procedure_full_name || '|CALLS|0001'
+            );
+            apex_json.write('name',      rec.procedure_name || ' | Call summary');
+            apex_json.write('title',     rec.procedure_name || ' | Call summary');
+            apex_json.write('chunkType', 'CODE');
+            apex_json.write('sourceType','PLSQL_PROCEDURE_CALLS');
+            apex_json.write('sourceName', rec.procedure_name);
+            apex_json.write('sourceKey',  rec.procedure_full_name);
+            apex_json.write('chunkIndex', 1);
+            apex_json.write('text',       l_chunk_text);
+            apex_json.close_object;
+        end if;
+    end loop;
+
+    apex_json.close_array;
+    apex_json.close_object;
+
+    l_clob := apex_json.get_clob_output;
+    apex_json.free_output;
+
+    save_apex_export(
+        pn_jobid         => l_jobid_exp,
+        pn_master_job_id => null,
+        pv_export_type   => 'ORA_PKG_PRC_CALL_CHUNKS',
+        pc_payload       => l_clob,
+        pc_cypher        => null,
+        pn_jobid_orig    => pn_JOBID,
+        pn_id            => pn_id
+    );
+
+    if upper(pvOutputType) = 'FILE' then
+        lv_cypher := '
+CALL apoc.load.json("export_ora_pkg_prc_call_chunks_<<pn_JOBID>>.json") YIELD value
+UNWIND value.data AS row
+
+MERGE (p:OracleProcedure {name: row.procedureFullName})
+SET p.dbName        = row.dbName,
+    p.owner         = row.packageOwner,
+    p.packageName   = row.packageName,
+    p.procedureName = row.procedureName,
+    p.fullName      = row.procedureFullName,
+    p.projectName   = row.projectName,
+    p.jobId         = row.jobId
+
+MERGE (c:Chunk {key: row.key})
+SET c.id_rc       = coalesce(row.id_rc, randomUUID()),
+    c.name        = row.name,
+    c.title       = row.title,
+    c.projectName = row.projectName,
+    c.chunkType   = row.chunkType,
+    c.sourceType  = row.sourceType,
+    c.sourceName  = row.sourceName,
+    c.sourceKey   = row.sourceKey,
+    c.chunkIndex  = row.chunkIndex,
+    c.text        = row.text
+
+MERGE (p)-[:HAS_CHUNK]->(c)
+';
+        lv_cypher := replace(lv_cypher, '<<pn_JOBID>>', to_char(l_jobid_exp));
+
+        lv_file := '
+Invoke-WebRequest "<<pvApexUrl>><<pn_JOBID>>" `
+  -UseDefaultCredentials `
+  -OutFile "export_ora_pkg_prc_call_chunks_<<pn_JOBID>>.json"
+';
+        lv_file := replace(lv_file, '<<pvApexUrl>>', pvApexUrl);
+        lv_file := replace(lv_file, '<<pn_JOBID>>', to_char(l_jobid_exp));
+    else
+        lv_cypher := '
+WITH "<<pvApexUrl>><<pn_JOBID>>" AS url
+CALL apoc.load.json(url) YIELD value
+UNWIND value.data AS row
+
+MERGE (p:OracleProcedure {name: row.procedureFullName})
+SET p.dbName        = row.dbName,
+    p.owner         = row.packageOwner,
+    p.packageName   = row.packageName,
+    p.procedureName = row.procedureName,
+    p.fullName      = row.procedureFullName,
+    p.projectName   = row.projectName,
+    p.jobId         = row.jobId
+
+MERGE (c:Chunk {key: row.key})
+SET c.id_rc       = coalesce(row.id_rc, randomUUID()),
+    c.name        = row.name,
+    c.title       = row.title,
+    c.projectName = row.projectName,
+    c.chunkType   = row.chunkType,
+    c.sourceType  = row.sourceType,
+    c.sourceName  = row.sourceName,
+    c.sourceKey   = row.sourceKey,
+    c.chunkIndex  = row.chunkIndex,
+    c.text        = row.text
+
+MERGE (p)-[:HAS_CHUNK]->(c)
+';
+        lv_cypher := replace(lv_cypher, '<<pvApexUrl>>', pvApexUrl);
+        lv_cypher := replace(lv_cypher, '<<pn_JOBID>>', to_char(l_jobid_exp));
+        lv_file := null;
+    end if;
+
+    pvOutCypher := lv_cypher;
+    pvOutFile   := lv_file;
+
+    update_apex_export_cypher(pn_id, pvOutCypher, pvOutFile);
+exception
+    when others then
+        insert into neoj_apex_exceptions(
+            jobid, package_name, procedure_name, exception_id, err_msg
+        ) values (
+            pn_JOBID,
+            'neo4jUtils',
+            'export_ora_pkg_prc_call_chunks',
+            'OTHERS',
+            dbms_utility.format_error_stack || chr(13) || dbms_utility.format_error_backtrace
+        );
+end export_ora_pkg_prc_call_chunks;            
+    
+    
     /*
     *                           Export all
     */
@@ -4719,32 +5805,37 @@ WHERE MC_PAGE.MIGRATION_CASE_ID=
     ) is
     begin
     -- Initialization
+        
     
         NEO4J_ORA.COMPILEIDENTIFIERS (  POWNER     => pv_OWNER,
                                         PPACKAGE   => pv_PACKAGE_NAME,
                                         PTYPE      => pv_PTYPE
                                     );
                      
-                                    
+                                           
         NEO4J_ORA.FILLALLPACKAGETABS (  POWNER     => pv_OWNER,
                                         PPACKAGE   => pv_PACKAGE_NAME,
-                                        PTYPE      => pv_PTYPE);                                    
+                                        PTYPE      => pv_PTYPE);
+                                                                                        
     
+
+        dbms_output.put_line('prepare_ora_all.loadIdentOraCallsForPackage start'); 
         NEO4JUTILS.loadIdentOraCallsForPackage (
             PN_JOBID          => pn_jobid,
             PV_OWNER          => pv_OWNER,
             PV_PACKAGE_NAME   => pv_PACKAGE_NAME,
             pv_PROJECT_NAME   => pv_PROJECT_NAME
             );
-            
+        dbms_output.put_line('prepare_ora_all.loadIdentOraCallsForPackage end');            
        
-            
+     
         NEO4JUTILS.loadIdentOraCRUDForPackage(
             PN_JOBID          => pn_jobid,
             PV_OWNER          => pv_OWNER,
             PV_PACKAGE_NAME   => pv_PACKAGE_NAME,
             pv_PROJECT_NAME   => pv_PROJECT_NAME
         );
+        
                     
     end prepare_ora_all;    
     
@@ -4919,14 +6010,6 @@ WHERE MC_PAGE.MIGRATION_CASE_ID=
 
         pvOutCypher := pvOutCypher || chr(10) || ';' || lv_cypher;
         pvOutFile   := pvOutFile   || chr(10) || lv_file;
-
-
-
-
-
-        
-
-
     end export_apex_all_cypher;        
  
     procedure export_migration_all_cypher(
@@ -5025,7 +6108,6 @@ WHERE MC_PAGE.MIGRATION_CASE_ID=
         pvOutFile        out clob,
         pn_id           out number
     ) is    
-        l_PN_JOBID      number;
     begin
         -- Call
         NEO4JUTILS.EXPORT_ORA_PKG_PRC_CALLS (
@@ -5038,10 +6120,10 @@ WHERE MC_PAGE.MIGRATION_CASE_ID=
             PVOUTFILE         => pvOutFile,
             pn_id            => pn_id);
             
-        l_PN_JOBID := neoj_apex_structure_seq.nextval;            
+                    
             
         NEO4JUTILS.export_ora_pkg_prc_crud(
-            PN_JOBID          => l_PN_JOBID,
+            PN_JOBID          => pn_jobid,
             PVOUTPUTSOURCE    => pvOutputSource,
             PVOUTPUTTYPE      => pvOutputType,
             PVAPEXURL         => pvApexUrl,
@@ -5080,6 +6162,83 @@ WHERE MC_PAGE.MIGRATION_CASE_ID=
 
     end;
     
+    procedure prepare_export_package( pv_owner in varchar2,
+                            pv_object_name in varchar2,
+                            pv_OUTPUTSOURCE in varchar2,
+                            pv_OUTPUTTYPE  in varchar2,
+                            pv_APEXURL  in varchar2,
+                            pv_project_name in varchar2                             
+                            ) as
+        ln_jobid number := neoj_apex_structure_seq.nextval; 
+        lV_OUTFILE clob;
+        lV_OUTCYPHER clob;   
+        ln_PN_ID number; 
+    begin
+        NEO4J_ORA.COMPILEIDENTIFIERS (  POWNER     => pv_owner,
+                                        PPACKAGE   => pv_object_name,
+                                        PTYPE      => 'pkg'
+                                    );
+                   
+        NEO4J_ORA.FILLALLPACKAGETABS (  POWNER     => pv_owner,
+                                        PPACKAGE   => pv_object_name,
+                                        PTYPE      => 'pkg');   
+        NEO4JUTILS.LOADIDENTORACRUDFORPACKAGE (
+            PN_JOBID          => ln_jobid,
+            PV_OWNER          => pv_owner,
+            PV_PACKAGE_NAME   => pv_object_name,
+            pv_project_name   => pv_project_name
+            );
+        
+    -- Call
+    NEO4JUTILS.EXPORT_ORA_PKG_PRC_CRUD (
+        PN_JOBID          => ln_JOBID,
+        PVOUTPUTSOURCE    => PV_OUTPUTSOURCE,
+        PVOUTPUTTYPE      => PV_OUTPUTTYPE,
+        PVAPEXURL         => PV_APEXURL,
+        PV_PROJECT_NAME   => PV_PROJECT_NAME,
+        PVOUTCYPHER       => lV_OUTCYPHER,
+        PVOUTFILE         => lV_OUTFILE,
+        PN_ID             => ln_PN_ID);
+        
+    -- Initialization
+    lN_JOBID := neoj_apex_structure_seq.nextval;       
+    NEO4JUTILS.LOADIDENTORACALLSFORPACKAGE (
+        PN_JOBID          => lN_JOBID,
+        PV_OWNER          => pv_owner,
+        PV_PACKAGE_NAME   => pv_object_name,
+        PV_PROJECT_NAME   => PV_PROJECT_NAME);
+
+    Y055490.NEO4JUTILS.EXPORT_ORA_PKG_PRC_CHUNKS (
+        PN_JOBID          => lN_JOBID,
+        PVOUTPUTSOURCE    => PV_OUTPUTSOURCE,
+        PVOUTPUTTYPE      => PV_OUTPUTTYPE,
+        PVAPEXURL         => PV_APEXURL,
+        PV_PROJECT_NAME   => PV_PROJECT_NAME,
+        PVOUTCYPHER       => lV_OUTCYPHER,
+        PVOUTFILE         => lV_OUTFILE,
+        PN_ID             => ln_PN_ID);
+
+    NEO4JUTILS.EXPORT_ORA_PKG_PRC_CALLS (
+        PN_JOBID          => lN_JOBID,
+        PVOUTPUTSOURCE    => PV_OUTPUTSOURCE,
+        PVOUTPUTTYPE      => PV_OUTPUTTYPE,
+        PVAPEXURL         => PV_APEXURL,
+        PV_PROJECT_NAME   => PV_PROJECT_NAME,
+        PVOUTCYPHER       => lV_OUTCYPHER,
+        PVOUTFILE         => lV_OUTFILE,
+        PN_ID             => ln_PN_ID);
+        
+    NEO4JUTILS.EXPORT_ORA_PKG_PRC_CALL_CHUNKS (
+        PN_JOBID          => lN_JOBID,
+        PVOUTPUTSOURCE    => PV_OUTPUTSOURCE,
+        PVOUTPUTTYPE      => PV_OUTPUTTYPE,
+        PVAPEXURL         => PV_APEXURL,
+        PV_PROJECT_NAME   => PV_PROJECT_NAME,
+        PVOUTCYPHER       => lV_OUTCYPHER,
+        PVOUTFILE         => lV_OUTFILE,
+        PN_ID             => ln_PN_ID);
+END prepare_export_package;
+
     
 /*
 
